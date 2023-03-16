@@ -15,6 +15,14 @@ from torch.utils.data import Dataset
 from torchvision.datasets.folder import make_dataset, find_classes
 from sklearn.model_selection import StratifiedKFold
 from toolkit.data.utils import IMG_FORMATS, find_files
+from PIL import Image
+
+
+def pil_loader(path: str) -> Image.Image:
+    # open path as file to avoid ResourceWarning (https://github.com/python-pillow/Pillow/issues/835)
+    with open(path, "rb") as f:
+        img = Image.open(f)
+        return img.convert("L")
 
 
 class LymphBaseDataset(Dataset, ABC):
@@ -56,21 +64,25 @@ class KFoldLymphDataset(LymphBaseDataset):
         for train_idx, test_idx in self.stratified_k_fold.split(patient_id, classes):
             train_id, train_labels = np.array(patient_id)[train_idx], np.array(classes)[train_idx]
             test_id, test_labels = np.array(patient_id)[test_idx], np.array(classes)[test_idx]
-            train_f = self.get_sample(train_id, train_labels)
-            test_f = self.get_sample(test_id, test_labels)
-            yield WrapperKFoldDataset(train_f), WrapperKFoldDataset(test_f)
 
-    def get_sample(self, ids, labels):
+            train_f, test_f = self.get_samples(train_id, train_labels), self.get_samples(test_id, test_labels)
+
+            yield WrapperFoldDataset(train_f), WrapperFoldDataset(test_f)
+
+    def get_samples(self, ids, labels):
         f = []
         for id, label in zip(ids, labels):
             p = Path(self.root) / self.idx_to_class[label] / id
             im_files = find_files(str(p), 'jpg', recursive=True)
             for im_file in im_files:
-                f += [im_file, label]
+                f.append({"im_file": im_file,
+                          "id": id,
+                          "label": label,
+                          "class": self.idx_to_class[label]})
         return f
 
 
-class WrapperKFoldDataset(Dataset):
+class WrapperFoldDataset(Dataset):
     def __init__(self, samples, transform=None):
         self.samples = samples
         self.transform = transform
@@ -79,13 +91,10 @@ class WrapperKFoldDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, item):
-        im_file, label = self.samples[item].copy()
-        label = {}
+        label = self.samples[item].copy()
+        label['im_file'] = str(label['im_file'])
+        label['img'] = pil_loader(label['im_file'])
         if self.transform:
-            pass
+            label['img'] = self.transform(label['img'])
 
         return label
-
-
-if __name__ == "__main__":
-    lymph_dataset = LymphBaseDataset("/home/corn/PycharmProjects/LymphNode/lymph-node-1.20-square")
