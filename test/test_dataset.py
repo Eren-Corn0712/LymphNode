@@ -2,8 +2,8 @@ import torch
 import torchvision.transforms as transforms
 from toolkit.data.lymph_dataset import LymphBaseDataset, KFoldLymphDataset
 from pathlib import Path
-DIR_DATASET = "../dataset"
 
+DIR_DATASET = "../dataset"
 
 
 class TestClass(object):
