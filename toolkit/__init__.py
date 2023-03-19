@@ -20,12 +20,10 @@ import numpy as np
 import torch
 import yaml
 
-from ultralytics import __version__
-
 # Constants
 FILE = Path(__file__).resolve()
-ROOT = FILE.parents[2]  # YOLO
-DEFAULT_CFG_PATH = ROOT / 'yolo/cfg/default.yaml'
+ROOT = FILE.parents[1]  # YOLO
+DEFAULT_CFG_PATH = ROOT / 'toolkit' / 'cfg' / 'default.yaml'
 RANK = int(os.getenv('RANK', -1))
 NUM_THREADS = min(8, max(1, os.cpu_count() - 1))  # number of YOLOv5 multiprocessing threads
 AUTOINSTALL = str(os.getenv('YOLO_AUTOINSTALL', True)).lower() == 'true'  # global auto-install mode
@@ -560,8 +558,8 @@ def get_settings(file=USER_CONFIG_DIR / 'settings.yaml', version='0.0.2'):
     """
     import hashlib
 
-    from ultralytics.yolo.utils.checks import check_version
-    from ultralytics.yolo.utils.torch_utils import torch_distributed_zero_first
+    from toolkit.utils.checks import check_version
+    from toolkit.utils.torch_utils import torch_distributed_zero_first
 
     git_dir = get_git_dir()
     root = git_dir or Path()
