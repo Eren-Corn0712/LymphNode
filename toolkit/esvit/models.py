@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torchvision.models.swin_transformer import SwinTransformer
 
-__all__ = ['DINOHead']
+__all__ = ['DINOHead', 'swin_s']
 
 
 class SwinTransformerWrapper(SwinTransformer):
@@ -59,12 +59,23 @@ class SwinTransformerWrapper(SwinTransformer):
         x = self.permute(x_region)
         x = self.avgpool(x)
         x = self.flatten(x)
-        x = self.head(x)
 
         if self.use_dense_prediction:
-            return x, x_region
+            return x, x_region.flatten(1, 2)
         else:
             return x
+
+
+def swin_s(*args, **kwargs):
+    params = {
+        'patch_size': [4, 4],
+        'embed_dim': 96,
+        'depths': [2, 2, 18, 2],
+        'num_heads': [3, 6, 12, 24],
+        'window_size': [7, 7],
+        'stochastic_depth_prob': 0.0 if kwargs.get('is_teacher') else 0.3,
+    }
+    return SwinTransformerWrapper(**params)
 
 
 class DINOHead(nn.Module):

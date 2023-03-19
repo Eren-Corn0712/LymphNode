@@ -16,6 +16,7 @@ class TestClass(object):
     def test_esvit_trainer(self, *args, **kwargs):
         esvit_trainer = EsVitTrainer(ESVIT_DEFAULT_CFG)
         esvit_trainer.train()
+
     def __call__(self, *args, **kwargs):
         method = sorted(name for name in dir(self) if name.islower() and name.startswith("test"))
         for m in method:
@@ -23,4 +24,5 @@ class TestClass(object):
             getattr(self, f"{m}")(*args, **kwargs)
 
 
-TestClass()()
+if __name__ == "__main__":
+    TestClass()()
