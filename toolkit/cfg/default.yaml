@@ -1,0 +1,5 @@
+project: runs
+
+exist_ok: True
+device: 0
+seed: 0
