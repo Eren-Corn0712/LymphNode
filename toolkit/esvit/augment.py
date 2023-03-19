@@ -5,6 +5,7 @@ from toolkit.esvit.utils import GaussianBlur
 class DataAugmentationLymphNode(object):
     def __init__(self, global_crops_scale, local_crops_scale, local_crops_number, local_crops_size=96):
         normalize = transforms.Compose([
+            transforms.Grayscale(num_output_channels=3),
             transforms.ToTensor(),
         ])
         Random_HF_VF = transforms.Compose([
@@ -26,13 +27,6 @@ class DataAugmentationLymphNode(object):
             GaussianBlur(p=0.5),
             normalize,
         ])
-
-        # transformation for the local small crops
-        if not isinstance(local_crops_size, tuple) or not isinstance(local_crops_size, list):
-            local_crops_size = list(local_crops_size)
-
-        if not isinstance(local_crops_number, tuple) or not isinstance(local_crops_number, list):
-            local_crops_number = list(local_crops_number)
 
         self.local_crops_number = local_crops_number
 

@@ -97,5 +97,4 @@ class WrapperFoldDataset(Dataset):
         label['img'] = pil_loader(label['im_file'])
         if self.transform:
             label['img'] = self.transform(label['img'])
-
         return label
