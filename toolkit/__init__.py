@@ -21,6 +21,7 @@ import torch
 import yaml
 
 # Constants
+__version__ = '0.0.0'
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLO
 DEFAULT_CFG_PATH = ROOT / 'toolkit' / 'cfg' / 'default.yaml'

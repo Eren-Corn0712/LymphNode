@@ -15,7 +15,7 @@ class TestClass(object):
 
     def test_k_fold_lymph_dataset(self, *args, **kwargs):
         dataset = KFoldLymphDataset(DIR_DATASET)
-        for train_dataset, test_dataset in dataset.generate_data_splits():
+        for train_dataset, test_dataset in dataset.generate_fold_dataset():
             train_dataset.transform = transforms.Compose([transforms.ToTensor()])
             for i in train_dataset:
                 print(i)

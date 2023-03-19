@@ -59,7 +59,7 @@ class KFoldLymphDataset(LymphBaseDataset):
         super().__init__(root)
         self.stratified_k_fold = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
 
-    def generate_data_splits(self):
+    def generate_fold_dataset(self):
         patient_id = list(self.patient_id_to_class.keys())
         classes = list(self.patient_id_to_class.values())
         for train_idx, test_idx in self.stratified_k_fold.split(patient_id, classes):
