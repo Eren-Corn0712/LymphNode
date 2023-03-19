@@ -6,6 +6,7 @@ import os
 import urllib
 from datetime import datetime
 from pathlib import Path
+from typing import List
 
 
 class WorkingDirectory(contextlib.ContextDecorator):
@@ -90,3 +91,9 @@ def get_latest_run(search_dir='.'):
     # Return path to most recent 'last.pt' in /runs (i.e. to --resume from)
     last_list = glob.glob(f'{search_dir}/**/last*.pt', recursive=True)
     return max(last_list, key=os.path.getctime) if last_list else ''
+
+
+def find_files(root: str, fmt: str = "png", recursive: bool = False) -> List[Path]:
+    # Return all files with the specified format in the directory.
+    pattern = f'**/*.{fmt}' if recursive else f'*.{fmt}'
+    return sorted(list(Path(root).glob(pattern=pattern)))

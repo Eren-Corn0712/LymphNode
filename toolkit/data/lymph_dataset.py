@@ -14,7 +14,8 @@ from pathlib import Path
 from torch.utils.data import Dataset
 from torchvision.datasets.folder import make_dataset, find_classes
 from sklearn.model_selection import StratifiedKFold
-from toolkit.data.utils import IMG_FORMATS, find_files
+from toolkit.data.utils import IMG_FORMATS
+from toolkit.utils.files import find_files
 from PIL import Image
 
 
