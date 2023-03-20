@@ -4,6 +4,7 @@ import numpy as np
 import torch.nn.functional as F
 import torch.distributed as dist
 
+
 class DDINOLoss(nn.Module):
     def __init__(self, out_dim, ncrops, warmup_teacher_temp, teacher_temp,
                  warmup_teacher_temp_epochs, nepochs, student_temp=0.1,
@@ -55,8 +56,7 @@ class DDINOLoss(nn.Module):
         s_region = torch.split(s_region, s_split_size_bs, dim=0)
         s_fea = torch.split(s_fea, s_split_size_bs, dim=0)
 
-        view_loss = torch.zeros(1, device=s_cls[0].device)
-        region_loss = torch.zeros(1, device=s_region[0].device)
+        loss = torch.zeros(2, device=self.s_cls[0].device)
         n_loss_terms = 0
         for iq, q in enumerate(t_cls):
             for v in range(len(s_cls)):
@@ -65,7 +65,7 @@ class DDINOLoss(nn.Module):
                     continue
 
                 # view level prediction loss
-                view_loss += (0.5 * torch.sum(-q * F.log_softmax(s_cls[v], dim=-1), dim=-1)).mean()
+                loss[0] += (0.5 * torch.sum(-q * F.log_softmax(s_cls[v], dim=-1), dim=-1)).mean()
 
                 # region level prediction loss
                 s_region_cur, s_fea_cur = s_region[v].view(B, s_split_size[v], -1), s_fea[v].view(B, s_split_size[v],
@@ -86,12 +86,11 @@ class DDINOLoss(nn.Module):
                 loss_grid = torch.sum(- t_indexed_region * F.log_softmax(s_region_cur, dim=-1), dim=[-1]).mean(
                     -1)  # B x T_s x K --> B
 
-                region_loss += (0.5 * loss_grid).mean()
+                loss[1] += (0.5 * loss_grid).mean()
                 n_loss_terms += 1
 
-        view_loss /= n_loss_terms
-        region_loss /= n_loss_terms
-        loss = torch.cat([view_loss, region_loss], dim=0)
+        loss[0] /= n_loss_terms
+        loss[1] /= n_loss_terms
 
         self.update_center(t_cls_out, t_region_out)
 
