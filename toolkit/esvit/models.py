@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torchvision.models.swin_transformer import SwinTransformer
 
-__all__ = ['DINOHead', 'swin_s']
+__all__ = ['DINOHead', 'swin_s', 'swin_c']
 
 
 class SwinTransformerWrapper(SwinTransformer):
@@ -73,6 +73,18 @@ def swin_s(*args, **kwargs):
         'depths': [2, 2, 18, 2],
         'num_heads': [3, 6, 12, 24],
         'window_size': [7, 7],
+        'stochastic_depth_prob': 0.0 if kwargs.get('is_teacher') else 0.3,
+    }
+    return SwinTransformerWrapper(**params)
+
+
+def swin_c(*args, **kwargs):
+    params = {
+        'patch_size': [4, 4],
+        'embed_dim': 96,
+        'depths': [2, 2, 2, 2],
+        'num_heads': [1, 2, 4, 8],
+        'window_size': [14, 14],
         'stochastic_depth_prob': 0.0 if kwargs.get('is_teacher') else 0.3,
     }
     return SwinTransformerWrapper(**params)

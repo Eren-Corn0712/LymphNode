@@ -27,6 +27,7 @@ class BaseTrainer(object):
         self.device = select_device(self.args.device, self.args.batch)
         self.console = LOGGER
         init_seeds(self.args.seed + 1 + RANK, deterministic=self.args.deterministic)
+        self.resume = False
 
         # Dirs
         project = self.args.project or Path(SETTINGS['runs_dir']) / self.args.task
@@ -55,7 +56,11 @@ class BaseTrainer(object):
         if self.device.type == 'cpu':
             self.args.workers = 0  # faster CPU training as time dominated by inference, not dataloading
 
-
+        # Epoch level metrics
+        self.best_fitness = None
+        self.fitness = None
+        self.loss = None
+        self.tloss = None
 
     def _setup_ddp(self, rank, world_size):
         # os.environ['MASTER_ADDR'] = 'localhost'
@@ -84,16 +89,17 @@ class BaseTrainer(object):
             world_size = 0
 
         # Run subprocess if DDP training, else train normally
-        if world_size > 1 and "LOCAL_RANK" not in os.environ:
-            command = generate_ddp_command(world_size, self)
+        if world_size > 1 and 'LOCAL_RANK' not in os.environ:
+            cmd, file = generate_ddp_command(world_size, self)  # security vulnerability in Snyk scans
             try:
-                subprocess.run(command)
+                LOGGER.info(f'Running DDP command {cmd}')
+                subprocess.run(cmd, check=True)
             except Exception as e:
-                self.console(e)
+                raise e
             finally:
-                ddp_cleanup(command, self)
+                ddp_cleanup(self, str(file))
         else:
-            self._do_train(int(os.getenv("RANK", -1)), world_size)
+            self._do_train(RANK, world_size)
 
     def _do_train(self, rank=-1, world_size=1):
         raise NotImplementedError
