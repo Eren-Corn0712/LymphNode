@@ -10,7 +10,9 @@ __all__ = ['DINOHead', 'swin_s', 'swin_c']
 class SwinTransformerWrapper(SwinTransformer):
     def __init__(self, *args, **kwargs):
         super(SwinTransformerWrapper, self).__init__(*args, **kwargs)
-        self.use_dense_prediction = kwargs.get("use_dense_prediction", False)
+        for k, v in kwargs.items():
+            if not hasattr(self, k):
+                setattr(self, k, v)
 
     def forward(self, x):
         # convert to list
@@ -65,6 +67,15 @@ class SwinTransformerWrapper(SwinTransformer):
         else:
             return x
 
+    def forward_return_n_last_block(self, x, n=1, return_patch_avgpool=False, depth=[]):
+        output = []
+        layer_index = list(range(len(self.features) - 1, 0, -2))[:n]
+        for i, layer in enumerate(self.features):
+            x = layer(x)
+            if i in layer_index:
+                output.append(self.avgpool(x.permute([0, 3, 1, 2])))
+        return torch.cat(output, dim=1)
+
 
 def swin_s(*args, **kwargs):
     params = {
@@ -73,7 +84,7 @@ def swin_s(*args, **kwargs):
         'depths': [2, 2, 18, 2],
         'num_heads': [3, 6, 12, 24],
         'window_size': [7, 7],
-        'stochastic_depth_prob': 0.0 if kwargs.get('is_teacher') else 0.3,
+        'stochastic_depth_prob': 0.0 if kwargs.get('is_teacher', False) else 0.3,
     }
     return SwinTransformerWrapper(**params)
 

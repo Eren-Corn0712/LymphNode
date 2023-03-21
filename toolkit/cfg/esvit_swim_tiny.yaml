@@ -5,7 +5,7 @@ out_dim: 1024
 norm_last_layer: True
 momentum_teacher: 0.996
 use_bn_in_head: False
-use_dense_prediction: True
+use_dense_prediction: False
 
 # Temperature teacher parameters ---------------------------------------------------------------------------------------
 warmup_teacher_temp: 0.04
@@ -41,5 +41,5 @@ deterministic: False
 project: runs
 name: debug
 exist_ok: True
-device: 0,1
+device: 0
 seed: 0

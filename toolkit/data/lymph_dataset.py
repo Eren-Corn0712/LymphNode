@@ -8,11 +8,9 @@ import torchvision
 
 from tqdm import tqdm
 from abc import ABC
-from itertools import repeat
-from multiprocessing.pool import ThreadPool
 from pathlib import Path
 from torch.utils.data import Dataset
-from torchvision.datasets.folder import make_dataset, find_classes
+from torchvision.datasets.folder import find_classes
 from sklearn.model_selection import StratifiedKFold
 from toolkit.data.utils import IMG_FORMATS
 from toolkit.utils.files import find_files
@@ -31,23 +29,27 @@ class LymphBaseDataset(Dataset, ABC):
                  root,
                  prefix=''
                  ):
-        self.root = root
+        self.root = Path(root)
         self.classes, self.class_to_idx = self.find_classes(self.root)
         self.idx_to_class = {v: k for k, v in self.class_to_idx.items()}
-        self.patient_id, self.patient_id_to_class = self.find_patient_id()
+        self.labels = self.get_labels()
         self.prefix = prefix
 
-    def find_patient_id(self):
-        patient_id, patient_id_to_class = [], {}
-        for k, v in self.class_to_idx.items():
-            sub_dir = Path(self.root) / k
+    def get_labels(self):
+        labels = []
+        for cls in self.classes:
+            patient_id, _ = self.find_classes(self.root / cls)
+            for id in patient_id:
+                p = self.root / cls / id
+                files = glob.glob(str(p / '**' / '*.*'), recursive=True)
+                for f in files:
+                    d = dict(type=cls,
+                             id=id,
+                             im_file=f)
+                    labels.append(d)
 
-            p_id, p_id_to_idx = self.find_classes(str(sub_dir))
-
-            patient_id += p_id
-            patient_id_to_class.update({c: v for c, _ in p_id_to_idx.items()})
-
-        return patient_id, patient_id_to_class
+        labels = [l for l in labels if l['im_file'].split('.')[-1].lower() in IMG_FORMATS]
+        return labels
 
     @staticmethod
     def find_classes(directory) -> Tuple[List[str], Dict[str, int]]:
@@ -55,32 +57,25 @@ class LymphBaseDataset(Dataset, ABC):
 
 
 class KFoldLymphDataset(LymphBaseDataset):
-    def __init__(self, root, n_splits=5, shuffle=False, random_state=None):
+    def __init__(self, root, transform=None, n_splits=5, shuffle=False, random_state=None):
         super().__init__(root)
         self.stratified_k_fold = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
+        self.transform = transform
 
     def generate_fold_dataset(self):
-        patient_id = list(self.patient_id_to_class.keys())
-        classes = list(self.patient_id_to_class.values())
-        for train_idx, test_idx in self.stratified_k_fold.split(patient_id, classes):
-            train_id, train_labels = np.array(patient_id)[train_idx], np.array(classes)[train_idx]
-            test_id, test_labels = np.array(patient_id)[test_idx], np.array(classes)[test_idx]
+        labels = np.array([list(l.values()) for l in self.labels])
+        for train_idx, test_idx in self.stratified_k_fold.split(labels[:, 0], labels[:, 1]):
+            train_labels = list(np.array(self.labels)[train_idx])
+            test_labels = list(np.array(self.labels)[test_idx])
+            yield WrapperFoldDataset(train_labels), WrapperFoldDataset(test_labels)
 
-            train_f, test_f = self.get_samples(train_id, train_labels), self.get_samples(test_id, test_labels)
-
-            yield WrapperFoldDataset(train_f), WrapperFoldDataset(test_f)
-
-    def get_samples(self, ids, labels):
-        f = []
-        for id, label in zip(ids, labels):
-            p = Path(self.root) / self.idx_to_class[label] / id
-            im_files = find_files(str(p), 'jpg', recursive=True)
-            for im_file in im_files:
-                f.append({"im_file": im_file,
-                          "id": id,
-                          "label": label,
-                          "class": self.idx_to_class[label]})
-        return f
+    def __getitem__(self, item):
+        label = self.labels[item].copy()
+        label['im_file'] = str(label['im_file'])
+        label['img'] = pil_loader(label['im_file'])
+        if self.transform:
+            label['img'] = self.transform(label['img'])
+        return label
 
 
 class WrapperFoldDataset(Dataset):

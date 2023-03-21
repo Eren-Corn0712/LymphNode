@@ -1,15 +1,8 @@
 import os
-import numpy as np
 import torch
 import torch.distributed as dist
-import torch.nn as nn
+
 import subprocess
-
-from torch.cuda import amp
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim import lr_scheduler
-from tqdm import tqdm
-
 from pathlib import Path
 from toolkit.utils.checks import check_file, check_imgsz, print_args
 from toolkit.cfg import get_cfg
@@ -136,8 +129,5 @@ class BaseTrainer(object):
     def progress_string(self):
         return ""
 
-
-
     def build_optimizer(self):
         raise NotImplementedError("build_optimizer function not implemented")
-
