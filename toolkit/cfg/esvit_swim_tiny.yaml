@@ -10,7 +10,7 @@ use_dense_prediction: True
 # Temperature teacher parameters ---------------------------------------------------------------------------------------
 warmup_teacher_temp: 0.04
 teacher_temp: 0.04
-warmup_teacher_temp_epochs: 30
+warmup_teacher_temp_epochs: 0
 
 # Training/Optimization parameters -------------------------------------------------------------------------------------
 use_fp16: True

@@ -56,28 +56,16 @@ class BaseTrainer(object):
         if self.device.type == 'cpu':
             self.args.workers = 0  # faster CPU training as time dominated by inference, not dataloading
 
-        # Epoch level metrics
+        self.trainset, self.testset = None, None
+
+        self.optimizer = None
+        self.scheduler = None
+
         self.best_fitness = None
         self.fitness = None
         self.loss = None
         self.tloss = None
-
-    def _setup_ddp(self, rank, world_size):
-        # os.environ['MASTER_ADDR'] = 'localhost'
-        # os.environ['MASTER_PORT'] = '9020'
-        torch.cuda.set_device(rank)
-        self.device = torch.device('cuda', rank)
-        LOGGER.info(f'DDP settings: RANK {rank}, WORLD_SIZE {world_size}, DEVICE {self.device}')
-        dist.init_process_group('nccl' if dist.is_nccl_available() else 'gloo', rank=rank, world_size=world_size)
-
-    def get_model(self, cfg=None, weights=None, verbose=True):
-        raise NotImplementedError("This task trainer doesn't support loading cfg files")
-
-    def criterion(self, preds, batch):
-        """
-        Returns loss and individual loss items as Tensor.
-        """
-        raise NotImplementedError('criterion function not implemented in trainer')
+        self.csv = self.save_dir / 'results.csv'
 
     def train(self):
         # Allow device='', device=None on Multi-GPU systems to default to device=0
@@ -101,17 +89,55 @@ class BaseTrainer(object):
         else:
             self._do_train(RANK, world_size)
 
+    def _setup_ddp(self, rank, world_size):
+        # os.environ['MASTER_ADDR'] = 'localhost'
+        # os.environ['MASTER_PORT'] = '9020'
+        torch.cuda.set_device(rank)
+        self.device = torch.device('cuda', rank)
+        LOGGER.info(f'DDP settings: RANK {rank}, WORLD_SIZE {world_size}, DEVICE {self.device}')
+        dist.init_process_group('nccl' if dist.is_nccl_available() else 'gloo', rank=rank, world_size=world_size)
+
+    def _setup_train(self, rank, world_size):
+        raise NotImplementedError
+
     def _do_train(self, rank=-1, world_size=1):
         raise NotImplementedError
 
-    def log(self, text, rank=-1):
-        """
-        Logs the given text to given ranks process if provided, otherwise logs to all ranks.
+    def save_model(self):
+        raise NotImplementedError
 
-        Args"
-            text (str): text to log
-            rank (List[Int]): process rank
+    def get_dataset(self):
+        raise NotImplementedError
 
-        """
-        if rank in (-1, 0):
-            self.console.info(text)
+    def setup_model(self):
+        raise NotImplementedError
+
+    def optimizer_step(self):
+        raise NotImplementedError
+
+    def preprocess_batch(self, batch):
+        return batch
+
+    def get_model(self, cfg=None, weights=None, verbose=True):
+        raise NotImplementedError("Please implement get_model method.")
+
+    def get_dataloader(self):
+        raise NotImplementedError("get_dataloader function not implemented in trainer.")
+
+    def criterion(self, preds, batch):
+        raise NotImplementedError("criterion function not implemented in trainer.")
+
+    def label_loss_items(self, loss_items=None, prefix='train'):
+        return {'loss': loss_items if loss_items is not None else ['loss']}
+
+    def resume_training(self, ckpt):
+        raise NotImplementedError("resume_training function not implemented")
+
+    def progress_string(self):
+        return ""
+
+
+
+    def build_optimizer(self):
+        raise NotImplementedError("build_optimizer function not implemented")
+

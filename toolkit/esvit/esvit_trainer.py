@@ -1,9 +1,11 @@
+import os
 import time
 from datetime import datetime
 
 import torchvision
 import torch
 import torch.utils.data
+import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.cuda import amp
 import torch.distributed as dist
@@ -14,7 +16,8 @@ from toolkit.engine.base_train import BaseTrainer
 from toolkit.esvit import models
 from toolkit.esvit.models import DINOHead
 from toolkit.esvit.dino_loss import DDINOLoss
-from toolkit.esvit.utils import get_params_groups, cosine_scheduler
+from toolkit.esvit.utils import (get_params_groups, cosine_scheduler, has_batchnorms, LARS, clip_gradients,
+                                 cancel_gradients_last_layer, restart_from_checkpoint)
 from toolkit.esvit.augment import DataAugmentationLymphNode, FineTuneAugmentation
 from toolkit import colorstr, TQDM_BAR_FORMAT
 from toolkit.utils import RANK
@@ -26,8 +29,9 @@ from tqdm import tqdm
 class EsVitTrainer(BaseTrainer):
     def __init__(self, cfg, overrides=None):
         super(EsVitTrainer, self).__init__(cfg=cfg, overrides=overrides)
+        self.to_restore = None
         self.embed_dim = None
-        self.compute_loss = None
+        self.dino_loss = None
         self.dataset = self.get_dataset()
         self.student = self.get_model()
         self.teacher = self.get_model(is_teacher=True)
@@ -106,34 +110,45 @@ class EsVitTrainer(BaseTrainer):
         """
         Returns loss and individual loss items as Tensor.
         """
-        return self.compute_loss(preds['student_output'], preds['teacher_output'], preds['epoch'],
-                                 preds['targets_mixup'])
+        return self.dino_loss(preds['student_output'], preds['teacher_output'], preds['epoch'],
+                              preds['targets_mixup'])
 
     def _setup_train(self, rank, world_size, data_loader):
 
-        self.teacher = self.teacher.cuda()
-        self.student = self.student.cuda()
+        self.teacher = self.teacher.to(self.device)
+        self.student = self.student.to(self.device)
+
+        if has_batchnorms(self.student):
+            self.student = nn.SyncBatchNorm.convert_sync_batchnorm(self.student)
+            self.teacher = nn.SyncBatchNorm.convert_sync_batchnorm(self.teacher)
 
         if world_size > 1:
-            # self.teacher = DDP(self.teacher, device_ids=[rank])
+            self.teacher = DDP(self.teacher, device_ids=[rank])
             self.student = DDP(self.student, device_ids=[rank])
 
-        # Check AMP
-        self.amp = torch.tensor(True).to(self.device)
-        if RANK > -1:  # DDP
-            dist.broadcast(self.amp, src=0)  # broadcast the tensor from rank 0 to all other ranks (returns None)
-        self.amp = bool(self.amp)  # as boolean
-        self.scaler = amp.GradScaler(enabled=self.amp)
+        # teacher and student start with the same weights
+        de_parallel(self.teacher).load_state_dict(de_parallel(self.student).state_dict())
+
+        # there is no backpropagation through the teacher, so no need for gradients
+        for p in self.teacher.parameters():
+            p.requires_grad = False
+
+        self.log(f"Student and Teacher are built: they are both {self.args.arch} network.")
 
         self.loss_names = ["view-loss", "region-loss"]
-        self.compute_loss = DDINOLoss(
-            self.args.out_dim,
-            sum(self.args.local_crops_number) + 2,  # total number of crops = 2 global crops + local_crops_number
-            self.args.warmup_teacher_temp,
-            self.args.teacher_temp,
-            self.args.warmup_teacher_temp_epochs,
-            self.args.epochs,
-        ).cuda()
+
+        # preparing loss
+        if self.args.use_dense_prediction:
+            self.dino_loss = DDINOLoss(
+                self.args.out_dim,
+                sum(self.args.local_crops_number) + 2,  # total number of crops = 2 global crops + local_crops_number
+                self.args.warmup_teacher_temp,
+                self.args.teacher_temp,
+                self.args.warmup_teacher_temp_epochs,
+                self.args.epochs,
+            ).to(self.device)
+        else:
+            raise ValueError("Not support non-dense prediction.")
 
         self.optimizer = self.build_optimizer(model=self.student,
                                               name=self.args.optimizer,
@@ -156,17 +171,39 @@ class EsVitTrainer(BaseTrainer):
         self.momentum_schedule = cosine_scheduler(self.args.momentum_teacher, 1,
                                                   self.args.epochs, len(data_loader))
 
-        self.log(f"🚆 Loss-{self.compute_loss.__class__.__name__} "
+        # for mixed precision training
+        self.scaler = None
+        if self.args.use_fp16:
+            self.scaler = torch.cuda.amp.GradScaler(enabled=self.args.use_fp16)
+
+        self.log(f"🚆 Loss-{self.dino_loss.__class__.__name__} "
                  f"Optimizer-{self.optimizer.__class__.__name__} "
                  f"Schedulers-Cosine_scheduler 🚆\n")
 
+        self.restart_from_checkpoint()
+
+    def restart_from_checkpoint(self):
+        self.to_restore = {"epoch": 0}
+        restart_from_checkpoint(
+            str(self.last),
+            run_variables=self.to_restore,
+            student=self.student,
+            teacher=self.teacher,
+            optimizer=self.optimizer,
+            fp16_scaler=self.scaler,
+            dino_loss=self.dino_loss,
+        )
+        self.start_epoch = self.to_restore["epoch"]
+
     def build_optimizer(self, model, name, lr, momentum, decay):
-        # ============ preparing optimizer ... ============
+        # preparing optimizer
         params_groups = get_params_groups(model)
         if self.args.optimizer == "adamw":
             optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
         elif self.args.optimizer == "sgd":
             optimizer = torch.optim.SGD(params_groups, lr=0, momentum=0.9)  # lr is set by scheduler
+        elif self.args.optimizer == "lars":
+            optimizer = LARS(params_groups)  # to use with convnet and large batches
         else:
             raise ValueError(f"Unknown optimizer {self.args.optimizer}")
         return optimizer
@@ -187,6 +224,7 @@ class EsVitTrainer(BaseTrainer):
             self.log(f"Using {self.train_loader.num_workers * (world_size or 1)} dataloader workers\n"
                      f"Logging results to {colorstr('bold', self.save_dir)}\n"
                      f"Starting training for {self.epochs} epochs...")
+
             self.tloss = None
             self.optimizer.zero_grad()
             for epoch in range(self.start_epoch, self.epochs):
@@ -202,10 +240,8 @@ class EsVitTrainer(BaseTrainer):
                     self.log(self.progress_string())
                     pbar = tqdm(enumerate(self.train_loader), total=nb, bar_format=TQDM_BAR_FORMAT)
 
-                self.optimizer.zero_grad()
                 for i, batch in pbar:
-
-                    # global iteration
+                    # update weight decay and learning rate according to their schedule
                     it = len(self.train_loader) * epoch + i  # global training iteration
                     for i, param_group in enumerate(self.optimizer.param_groups):
                         param_group["lr"] = self.lr_schedule[it]
@@ -213,7 +249,7 @@ class EsVitTrainer(BaseTrainer):
                             param_group["weight_decay"] = self.wd_schedule[it]
 
                     # Forward
-                    with torch.cuda.amp.autocast(self.amp):
+                    with torch.cuda.amp.autocast(self.scaler is not None):
                         batch = self.preprocess_batch(batch)
                         # only the 2 global views pass through the teacher
                         with torch.no_grad():
@@ -234,10 +270,10 @@ class EsVitTrainer(BaseTrainer):
                     # Backward
                     self.optimizer.zero_grad()
                     self.scaler.scale(self.loss).backward()
+                    torch.cuda.synchronize()
 
                     # Optimize
                     self.optimizer_step()
-                    torch.cuda.synchronize()
 
                     # Log
                     mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
@@ -258,7 +294,8 @@ class EsVitTrainer(BaseTrainer):
                         self.best_fitness = self.fitness
 
                     # Save model
-                    self.save_model()
+                    if rank in (-1, 0):
+                        self.save_model()
 
     def progress_string(self):
         return ('\n' + '%12s' * (2 + len(self.loss_names))) % ('Epoch', 'GPU_mem', *self.loss_names)
@@ -268,8 +305,9 @@ class EsVitTrainer(BaseTrainer):
         return batch
 
     def optimizer_step(self):
-        # self.scaler.unscale_(self.optimizer)  # unscale gradients
-        # torch.nn.utils.clip_grad_norm_(self.student.parameters(), max_norm=10.0)  # clip gradients
+        if self.args.clip_grad:
+            self.scaler.unscale_(self.optimizer)  # unscale the gradients of optimizer's assigned params in-place
+            torch.nn.utils.clip_grad_norm_(self.student.parameters(), max_norm=10.0)  # clip gradients
         self.scaler.step(self.optimizer)
         self.scaler.update()
         self.optimizer.zero_grad()
@@ -281,8 +319,8 @@ class EsVitTrainer(BaseTrainer):
             'optimizer': self.optimizer.state_dict(),
             'epoch': self.epoch + 1,
             'args': self.args,
-            'dino_loss': self.compute_loss.state_dict(),
-            'date': datetime.now().isoformat(),
+            'dino_loss': self.dino_loss.state_dict(),
+            'fp16_scaler': self.scaler.state_dict()
         }
         torch.save(save_dict, self.last)
 
