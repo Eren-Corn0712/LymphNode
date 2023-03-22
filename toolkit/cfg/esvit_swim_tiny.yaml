@@ -17,7 +17,7 @@ use_fp16: True
 weight_decay: 0.04
 weight_decay_end: 0.4
 clip_grad: 3.0
-batch: 32
+batch: 2
 epochs: 31
 freeze_last_layer: 1
 lr: 0.0005
@@ -26,14 +26,14 @@ min_lr: 1.0E-6
 optimizer: adamw
 
 # Multi-crop parameters ------------------------------------------------------------------------------------------------
-aug_opt: lymphNode
+aug_opt: lymph_node
 global_crops_scale: [ 0.4,1.0 ]
 local_crops_number: [8, ]
 local_crops_scale: [ 0.05,0.4 ]
 local_crops_size: [96, ]
 
 # Global settings -------------------------------------------------------------------------------------------------------
-data_path: "../lymph_dataset"
+data_path: "../dataset"
 k_fold: 3
 pretrained_weights_ckpt: ""
 num_workers: 10

@@ -63,3 +63,14 @@ class FineTuneAugmentation(object):
 
     def __call__(self, image):
         return self.train_transform(image) if self.is_train else self.test_transform(image)
+
+
+def get_transform(args):
+    if args.aug_opt == "lymph_node":
+        transform = DataAugmentationLymphNode(args.global_crops_scale,
+                                              args.local_crops_scale,
+                                              args.local_crops_number,
+                                              args.local_crops_size)
+    else:
+        raise ValueError(f"{args.aug_opt} is not supported")
+    return transform

@@ -131,3 +131,7 @@ class BaseTrainer(object):
 
     def build_optimizer(self):
         raise NotImplementedError("build_optimizer function not implemented")
+
+    def log(self, text):
+        if RANK == -1:
+            self.console.info(text)

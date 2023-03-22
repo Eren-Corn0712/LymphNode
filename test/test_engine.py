@@ -1,7 +1,7 @@
 from toolkit.engine.base_train import BaseTrainer
 from toolkit.esvit.esvit_trainer import EsVitTrainer
 
-DIR_DATASET = "../lymph_dataset"
+DIR_DATASET = "../dataset"
 DEFAULT_CFG = "../toolkit/cfg/default.yaml"
 ESVIT_DEFAULT_CFG = "../toolkit/cfg/esvit_swim_tiny.yaml"
 

@@ -20,6 +20,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from toolkit.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER
 from toolkit.utils.checks import check_version
 from toolkit import __version__
+from toolkit import colorstr
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
@@ -177,10 +178,10 @@ def model_info(model, detailed=False, verbose=True, imgsz=640):
                         (i, name, p.requires_grad, p.numel(), list(p.shape), p.mean(), p.std()))
 
     flops = get_flops(model, imgsz)
-    fused = ' (fused)' if model.is_fused() else ''
+    fused = ''
     fs = f', {flops:.1f} GFLOPs' if flops else ''
-    m = Path(getattr(model, 'yaml_file', '') or model.yaml.get('yaml_file', '')).stem.replace('yolo', 'YOLO') or 'Model'
-    LOGGER.info(f'{m} summary{fused}: {len(list(model.modules()))} layers, {n_p} parameters, {n_g} gradients{fs}')
+    LOGGER.info(
+        f'{colorstr(model.__class__.__name__)} summary{fused}: {len(list(model.modules()))} layers, {n_p} parameters, {n_g} gradients{fs}')
 
 
 def get_num_params(model):
