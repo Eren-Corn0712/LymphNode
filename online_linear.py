@@ -93,9 +93,9 @@ def run(
         print(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
         log_stats = {**{k: v for k, v in log_stats.items()},
                      **{f'test_{k}': v for k, v in test_stats.items()}}
-
-        with (Path(output_dir) / "log.txt").open("a") as f:
-            f.write(json.dumps(log_stats) + "\n")
+        if is_main_process():
+            with (Path(output_dir) / "log.txt").open("a") as f:
+                f.write(json.dumps(log_stats) + "\n")
         save_dict = {
             "epoch": epoch + 1,
             "state_dict": (de_parallel(linear_classifier)).state_dict(),
