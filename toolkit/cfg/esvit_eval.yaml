@@ -1,0 +1,6 @@
+n_last_blocks: 4
+avgpool_patchtokens: False
+epochs: 100
+lr: 0.001
+batch: 128
+num_labels: 2
