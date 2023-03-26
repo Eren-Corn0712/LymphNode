@@ -40,4 +40,5 @@ name: debug
 exist_ok: true
 device: 0
 seed: 0
+sampler: distributed
 save_dir: runs\debug
