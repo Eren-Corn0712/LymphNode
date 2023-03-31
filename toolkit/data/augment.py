@@ -3,6 +3,24 @@ import torchvision.transforms as transforms
 from PIL import ImageFilter, ImageOps, Image
 
 
+class ResizePadding(object):
+    def __init__(self, size):
+        self.size = size
+
+    def __call__(self, im):
+        old_size = im.size  # old_size[0] is in (width, height) format
+
+        ratio = float(self.size) / max(old_size)
+        new_size = tuple([int(x * ratio) for x in old_size])
+
+        im = im.resize(new_size, Image.ANTIALIAS)
+
+        new_im = Image.new("RGB", (self.size, self.size))
+        new_im.paste(im, ((self.size - new_size[0]) // 2,
+                          (self.size - new_size[1]) // 2))
+        return new_im
+
+
 class Posterize(object):
     """
     Apply Posterize to the PIL image.

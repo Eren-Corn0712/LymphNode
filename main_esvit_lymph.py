@@ -168,8 +168,8 @@ def get_args_parser():
     parser.add_argument('--sampler', default="distributed", type=str, help='Sampler for dataloader.')
 
     # Misc
-    parser.add_argument('--data_path', default='dataset', type=str,
-                        help='Please specify path to the ImageNet training data.')
+    parser.add_argument('--data_path', default=['dataset', 'leaf_tumor_video'], type=str,
+                        nargs='+', help='Please specify path to the ImageNet training data.')
 
     parser.add_argument('--pretrained_weights_ckpt', default='', type=str,
                         help="Path to pretrained weights to evaluate.")
@@ -287,7 +287,6 @@ def train_esvit(args):
                     norm_last_layer=args.norm_last_layer,
                 )
                 teacher.head_dense = DINOHead(teacher.num_features, args.out_dim, args.use_bn_in_head)
-
 
         else:
             raise ValueError(f"Unknow architecture: {args.arch}")
@@ -534,7 +533,8 @@ def train_one_epoch(student, teacher, dino_loss, data_loader,
 
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(fp16_scaler is not None):
-            teacher_output = teacher(teacher_input)  # only the 2 global views pass through the teacher
+            with torch.no_grad():
+                teacher_output = teacher(teacher_input)  # only the 2 global views pass through the teacher
             student_output = student(student_input)
             loss, loss_items = dino_loss(student_output, teacher_output, epoch, targets_mixup)
 

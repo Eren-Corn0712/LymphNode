@@ -157,6 +157,7 @@ class DDINOLoss(nn.Module):
 
                 n_loss_terms += 1
 
+        # global local
         total_loss[0] /= n_loss_terms
         total_loss[1] /= n_loss_terms
 
