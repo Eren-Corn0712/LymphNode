@@ -145,9 +145,9 @@ class DDINOLoss(nn.Module):
                 region_sim_ind = region_sim_matrix.max(dim=2)[
                     1]  # B x T_s; collect the argmax index in teacher for a given student feature
 
-                t_indexed_region = torch.gather(t_region_cur, 1, region_sim_ind.unsqueeze(2).expand(-1, -1,
-                                                                                                    t_region_cur.size(
-                                                                                                        2)))  # B x T_s x K (index matrix: B, T_s, 1)
+                t_indexed_region = torch.gather(
+                    t_region_cur, 1, region_sim_ind.unsqueeze(2).expand(-1, -1, t_region_cur.size(
+                        2)))  # B x T_s x K (index matrix: B, T_s, 1)
 
                 loss_grid = torch.sum(- t_indexed_region * F.log_softmax(s_region_cur, dim=-1), dim=[-1]).mean(
                     -1)  # B x T_s x K --> B

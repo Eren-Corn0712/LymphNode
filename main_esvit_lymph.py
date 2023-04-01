@@ -213,7 +213,7 @@ def train_esvit(args):
         backbone_dataset = deepcopy(train_set)
         train_set.transform = get_transform(args, "eval_train")
         test_set.transform = get_transform(args, "eval_test")
-        backbone_dataset.transform = get_transform(args, "lymph_node_aug")
+        backbone_dataset.transform = get_transform(args, args.aug_opt)
 
         data_loader, train_loader, val_loader = build_dataloader(args, backbone_dataset, train_set, test_set)
 
@@ -417,7 +417,7 @@ def train_esvit(args):
             }
             if fp16_scaler is not None:
                 save_dict['fp16_scaler'] = fp16_scaler.state_dict()
-            save_on_master(save_dict, str(fold_output_dir / 'last.pth'))
+            save_on_master(save_dict, last_w)
 
             if train_stats["loss"] < lowest_loss:
                 lowest_loss = train_stats["loss"]

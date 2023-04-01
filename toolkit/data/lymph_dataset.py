@@ -27,7 +27,7 @@ def pil_loader(path: str) -> Image.Image:
 class LymphBaseDataset(Dataset, ABC):
     def __init__(self,
                  root,
-                 prefix=''
+                 prefix="",
                  ):
         self.root = root
         self.labels = self.get_labels(img_path=self.root)
@@ -61,7 +61,7 @@ class LymphBaseDataset(Dataset, ABC):
             return labels
 
         except Exception as e:
-            raise FileNotFoundError(f'{self.prefix}Error loading data from {img_path}\n') from e
+            raise FileNotFoundError(f'Error loading data from {img_path}\n') from e
 
     @staticmethod
     def find_classes(directory) -> Tuple[List[str], Dict[str, int]]:

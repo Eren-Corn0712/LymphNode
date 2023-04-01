@@ -20,6 +20,7 @@ def show(imgs, save_dir=None, fname=None):
 
     if save_dir is not None:
         fig.savefig(save_dir / f'{fname}.png', dpi=200)
+    fig.show()
 
 
 def scale_to_01_range(x):

@@ -28,7 +28,7 @@ def run(
         args,
         output_dir,
         epochs=100,
-        lr=0.001,
+        lr=0.0005,
 ):
     if args.arch in swin_transformer.__dict__.keys():
         embed_dim = model.embed_dim
@@ -50,6 +50,7 @@ def run(
         for i, d in enumerate(depths):
             num_features += [int(embed_dim * 2 ** i)] * d
         print(num_features)
+        args.n_last_blocks = 2
         num_features_linear = sum(num_features[-args.n_last_blocks:])
         print(f'num_features_linear {num_features_linear}')
         linear_classifier = LinearClassifier(num_features_linear, args.num_labels)
@@ -110,7 +111,7 @@ def run(
             if f1 > best_f1:
                 name = ['Benign', 'Malignant']
                 best_acc, best_f1 = test_stats["acc1"], f1
-                print(f'Max accuracy so far: {best_acc:.2f}% F1-Score: {f1:.2f}')
+                print(f'Max accuracy so far: {best_acc:.4f}% F1-Score: {f1:.4f}')
 
                 save_on_master(save_dict, str(best_w))
                 pd.DataFrame(classification_report(result['target'], result['predict'],
