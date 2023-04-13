@@ -98,11 +98,17 @@ def get_params_groups(model):
 
 
 def has_batchnorms(model):
-    bn_types = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.SyncBatchNorm)
-    for name, module in model.named_modules():
-        if isinstance(module, bn_types):
-            return True
-    return False
+    """
+    Checks whether a given PyTorch model contains any BatchNorm modules.
+
+    Args:
+        model: A PyTorch model object.
+
+    Returns:
+        A boolean value indicating whether the model contains BatchNorm modules.
+    """
+    return any(isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.SyncBatchNorm))
+               for module in model.modules())
 
 
 def accuracy(output, target, topk=(1,)):
@@ -456,3 +462,16 @@ def select_device(device='', batch=0, newline=False, verbose=True):
     if verbose and RANK == -1:
         LOGGER.info(s if newline else s.rstrip())
     return torch.device(arg)
+
+
+def build_optimizer(optimizer: str, model: nn.Module) -> torch.optim.Optimizer:
+    params_groups = get_params_groups(model)
+    if optimizer == "adamw":
+        optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
+    elif optimizer == "sgd":
+        optimizer = torch.optim.SGD(params_groups, lr=0, momentum=0.9)  # lr is set by scheduler
+    elif optimizer == "lars":
+        optimizer = LARS(params_groups)  # to use with convnet and large batches
+    else:
+        raise ValueError("Unknown optimizer")
+    return optimizer

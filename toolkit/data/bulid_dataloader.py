@@ -15,7 +15,6 @@ def weight_sampler(dataset):
 
 
 def build_dataloader(args, backbone_dataset, train_dataset, test_dataset):
-
     if args.distributed:
         if hasattr(args, "ra_sampler") and args.ra_sampler:
             sampler = RASampler(backbone_dataset, shuffle=True, repetitions=args.ra_reps)
@@ -48,7 +47,7 @@ def build_dataloader(args, backbone_dataset, train_dataset, test_dataset):
     test_loader = DataLoader(
         test_dataset,
         sampler=test_sampler,
-        batch_size=args.batch_size_per_gpu * 2,
+        batch_size=args.batch_size_per_gpu * 4,
         num_workers=args.num_workers,
         pin_memory=True,
     )

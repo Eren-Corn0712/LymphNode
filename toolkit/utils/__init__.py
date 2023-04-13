@@ -105,8 +105,10 @@ def yaml_load(file='data.yaml', append_filename=False):
 def yaml_print(yaml_file: Union[str, Path, dict]) -> None:
     """
     Pretty prints a yaml file or a yaml-formatted dictionary.
+
     Args:
         yaml_file: The file path of the yaml file or a yaml-formatted dictionary.
+
     Returns:
         None
     """

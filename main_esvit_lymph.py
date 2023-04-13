@@ -18,11 +18,11 @@ from copy import deepcopy
 
 from toolkit.data.lymph_dataset import KFoldLymphDataset
 
-from toolkit.utils import yaml_load, yaml_save, yaml_print, bool_flag, LOGGER
+from toolkit.utils import yaml_load, yaml_save, yaml_print, bool_flag
 from toolkit.utils.torch_utils import (init_seeds, de_parallel, has_batchnorms, cosine_scheduler,
                                        time_sync, get_params_groups, LARS, MultiCropWrapper, load_pretrained_weights,
                                        restart_from_checkpoint, clip_gradients, cancel_gradients_last_layer,
-                                       model_info, select_device)
+                                       model_info, select_device, build_optimizer)
 
 from toolkit.utils.dist_utils import (init_distributed_mode, is_main_process,
                                       get_world_size, save_on_master)
@@ -75,7 +75,7 @@ def get_args_parser():
                         help='Number of warmup epochs for the teacher temperature (Default: 30).')
 
     # Training/Optimization parameters
-    parser.add_argument('--use_fp16', type=bool_flag, default=True, help="""Whether or not
+    parser.add_argument('--amp', type=bool_flag, default=True, help="""Whether or not
         to use half precision for training. Improves training time and memory requirements,
         but can provoke instability and slight decay of performance. We recommend disabling
         mixed precision if the loss is unstable, if reducing the patch size or if training with bigger ViTs.""")
@@ -119,7 +119,7 @@ def get_args_parser():
         When disabling multi-crop we recommend to use "--local_crops_size 96." """)
 
     # Augmentation parameters
-    parser.add_argument('--aug-opt', type=str, default='dino_aug', metavar='NAME',
+    parser.add_argument('--aug-opt', type=str, default='lymph_node_aug', metavar='NAME',
                         help='Use different data augmentation policy. [deit_aug, dino_aug, mocov2_aug, basic_aug] \
                              "(default: dino_aug)')
     parser.add_argument('--color-jitter', type=float, default=0.4, metavar='PCT',
@@ -129,35 +129,6 @@ def get_args_parser():
                              "(default: rand-m9-mstd0.5-inc1)'),
     parser.add_argument('--train-interpolation', type=str, default='bicubic',
                         help='Training interpolation (random, bilinear, bicubic default: "bicubic")')
-
-    # * Random Erase params
-    parser.add_argument('--reprob', type=float, default=0.25, metavar='PCT',
-                        help='Random erase prob (default: 0.25)')
-    parser.add_argument('--remode', type=str, default='pixel',
-                        help='Random erase mode (default: "pixel")')
-    parser.add_argument('--recount', type=int, default=1,
-                        help='Random erase count (default: 1)')
-    parser.add_argument('--resplit', action='store_true', default=False,
-                        help='Do not random erase first (clean) augmentation split')
-
-    # * Mixup params
-    parser.add_argument('--use_mixup', type=bool_flag, default=False,
-                        help="""Whether or not to use mixup/mixcut for self-supervised learning.""")
-    parser.add_argument('--num_mixup_views', type=int, default=10, help="""Number of views to apply mixup/mixcut """)
-
-    parser.add_argument('--mixup', type=float, default=0.8,
-                        help='mixup alpha, mixup enabled if > 0. (default: 0.8)')
-    parser.add_argument('--cutmix', type=float, default=1.0,
-                        help='cutmix alpha, cutmix enabled if > 0. (default: 1.0)')
-    parser.add_argument('--cutmix-minmax', type=float, nargs='+', default=None,
-                        help='cutmix min/max ratio, overrides alpha and enables cutmix if set (default: None)')
-    parser.add_argument('--mixup-prob', type=float, default=1.0,
-                        help='Probability of performing mixup or cutmix when either/both is enabled')
-    parser.add_argument('--mixup-switch-prob', type=float, default=0.5,
-                        help='Probability of switching to cutmix when both mixup and cutmix enabled')
-    parser.add_argument('--mixup-mode', type=str, default='batch',
-                        help='How to apply mixup/cutmix params. Per "batch", "pair", or "elem"')
-    parser.add_argument('--smoothing', type=float, default=0.0, help='Label smoothing (default: 0.1)')
 
     # Dataset
     parser.add_argument('--dataset', default="imagenet1k", type=str, help='Pre-training dataset.')
@@ -174,7 +145,6 @@ def get_args_parser():
     parser.add_argument('--pretrained_weights_ckpt', default='', type=str,
                         help="Path to pretrained weights to evaluate.")
     parser.add_argument('--output_dir', default="runs/debug", type=str, help='Path to save logs and checkpoints.')
-    parser.add_argument('--saveckp_freq', default=5, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=0, type=int, help='Number of data loading workers per GPU.')
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
@@ -198,8 +168,10 @@ def get_args_parser():
 
 
 def train_esvit(args):
+    # Setting the distributed model
     init_distributed_mode(args)
     init_seeds(args.seed)
+
     yaml_save(Path(args.output_dir) / 'args.yaml', data=vars(args))
     yaml_print(Path(args.output_dir) / 'args.yaml')
 
@@ -207,9 +179,11 @@ def train_esvit(args):
     # ============ preparing data ... ============
     k_fold_dataset = KFoldLymphDataset(args.data_path)
     for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
+        # Create folder output file
         fold_output_dir = Path(args.output_dir) / f'{k + 1}-fold'
         fold_output_dir.mkdir(parents=True, exist_ok=True)
 
+        # transformation for backbone, train linear, test linear
         backbone_dataset = deepcopy(train_set)
         train_set.transform = get_transform(args, "eval_train")
         test_set.transform = get_transform(args, "eval_test")
@@ -221,23 +195,15 @@ def train_esvit(args):
             iter(val_loader))['img']
 
         if is_main_process():
-            for i in range(min(2, args.batch_size_per_gpu)):
+            show_num = min(4, args.batch_size_per_gpu)
+            for i in range(show_num):
                 global_view = [view[i] for view in views[:2]]
                 local_view = [view[i] for view in views[2:]]
                 show(make_grid(global_view), fold_output_dir, f'{i}-global-view')
                 show(make_grid(local_view), fold_output_dir, f'{i}-local-view')
-            show(make_grid(train_imgs), fold_output_dir, f'train-imgs')
-            show(make_grid(val_imgs), fold_output_dir, f'val-imgs')
+            show(make_grid(train_imgs[:show_num]), fold_output_dir, f'train-imgs')
+            show(make_grid(val_imgs[:show_num]), fold_output_dir, f'val-imgs')
             del views, train_imgs, val_imgs
-
-        # setup mixup / cutmix
-        mixup_fn = None
-        mixup_active = args.mixup > 0 or args.cutmix > 0. or args.cutmix_minmax is not None
-        if mixup_active and args.use_mixup:
-            mixup_fn = Mixup(
-                mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
-                prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
-                label_smoothing=args.smoothing, num_classes=args.batch_size_per_gpu)
 
         # ============ building student and teacher networks ... ============
 
@@ -293,6 +259,7 @@ def train_esvit(args):
 
         # move networks to gpu
         student, teacher = student.to(device), teacher.to(device)
+
         # synchronize batch norms (if any)
         if args.distributed:
             if has_batchnorms(student):
@@ -300,18 +267,20 @@ def train_esvit(args):
                 teacher = nn.SyncBatchNorm.convert_sync_batchnorm(teacher)
             teacher = nn.parallel.DistributedDataParallel(teacher, device_ids=[args.gpu])
             student = nn.parallel.DistributedDataParallel(student, device_ids=[args.gpu])
+
         # teacher and student start with the same weights
         de_parallel(teacher).load_state_dict(de_parallel(student).state_dict())
 
         # there is no backpropagation through the teacher, so no need for gradients
         for p in teacher.parameters():
             p.requires_grad = False
+
         print(f"Student and Teacher are built: they are both {args.arch} network.")
 
         model_info(de_parallel(teacher), imgsz=224)
         model_info(de_parallel(student), imgsz=224)
-        # ============ preparing loss ... ============
 
+        # ============ preparing loss ... ============
         if args.use_dense_prediction:
             # Both view and region level tasks are considered
             dino_loss = DDINOLoss(
@@ -334,20 +303,10 @@ def train_esvit(args):
             ).to(device)
 
         # ============ preparing optimizer ... ============
-        params_groups = get_params_groups(student)
-        if args.optimizer == "adamw":
-            optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
-        elif args.optimizer == "sgd":
-            optimizer = torch.optim.SGD(params_groups, lr=0, momentum=0.9)  # lr is set by scheduler
-        elif args.optimizer == "lars":
-            optimizer = LARS(params_groups)  # to use with convnet and large batches
-        else:
-            raise ValueError("Unknown optimizer")
+        optimizer = build_optimizer(optimizer=args.optimizer, model=student)
 
         # for mixed precision training
-        fp16_scaler = None
-        if args.use_fp16:
-            fp16_scaler = torch.cuda.amp.GradScaler()
+        scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
 
         # ============ init schedulers ... ============
         lr_schedule = cosine_scheduler(
@@ -364,6 +323,7 @@ def train_esvit(args):
         # momentum parameter is increased to 1. during training with a cosine schedule
         momentum_schedule = cosine_scheduler(args.momentum_teacher, 1,
                                              args.epochs, len(data_loader))
+
         print(f"Loss, optimizer and schedulers ready.")
 
         # ============ optionally resume training ... ============
@@ -376,7 +336,7 @@ def train_esvit(args):
                 student=de_parallel(student),
                 teacher=de_parallel(teacher),
                 optimizer=optimizer,
-                fp16_scaler=fp16_scaler,
+                scaler=scaler,
                 dino_loss=dino_loss,
             )
             print(f'Resumed from {args.pretrained_weights_ckpt}')
@@ -387,24 +347,32 @@ def train_esvit(args):
             student=de_parallel(student),
             teacher=de_parallel(teacher),
             optimizer=optimizer,
-            fp16_scaler=fp16_scaler,
+            scaler=scaler,
             dino_loss=dino_loss,
         )
         start_epoch = to_restore["epoch"]
 
         start_time = time.time()
-        print(f"Starting training of EsViT ! from epoch {start_epoch}")
+        print(f"Starting training of DINO! from epoch {start_epoch}")
         lowest_loss = sys.float_info.max
-        best_w = str(Path(fold_output_dir) / f'best.pth')
-        last_w = str(Path(fold_output_dir) / f'last.pth')
+        best_w = Path(fold_output_dir) / f'best.pth'
+        last_w = Path(fold_output_dir) / f'last.pth'
         for epoch in range(start_epoch, args.epochs):
-            student.train(), teacher.eval()
             if args.distributed:
                 data_loader.sampler.set_epoch(epoch)
             # ============ training one epoch of EsViT ... ============
-            train_stats = train_one_epoch(student, teacher, dino_loss,
-                                          data_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
-                                          epoch, mixup_fn, fp16_scaler, args)
+            train_stats = train_one_epoch(
+                student=student,
+                teacher=teacher,
+                dino_loss=dino_loss,
+                data_loader=data_loader,
+                optimizer=optimizer,
+                lr_schedule=lr_schedule,
+                wd_schedule=wd_schedule,
+                momentum_schedule=momentum_schedule,
+                epoch=epoch,
+                scaler=scaler,
+                args=args)
 
             # ============ writing logs ... ============
             save_dict = {
@@ -412,20 +380,25 @@ def train_esvit(args):
                 'teacher': de_parallel(teacher).state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch + 1,
-                'args': args,
+                'args': vars(args),
                 'dino_loss': dino_loss.state_dict(),
             }
-            if fp16_scaler is not None:
-                save_dict['fp16_scaler'] = fp16_scaler.state_dict()
+            if scaler is not None:
+                save_dict['scaler'] = scaler.state_dict()
+
+            # Save the last ,best and delete weight
             save_on_master(save_dict, last_w)
 
             if train_stats["loss"] < lowest_loss:
                 lowest_loss = train_stats["loss"]
-                LOGGER.info(f"The lowest loss {lowest_loss} model save on master {best_w}")
+                print(f"The lowest loss {lowest_loss} model save on master {best_w}")
                 save_on_master(save_dict, best_w)
+
+            del save_dict
 
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                          'epoch': epoch}
+
             if is_main_process():
                 with (Path(fold_output_dir / "log.txt")).open("a") as f:
                     f.write(json.dumps(log_stats) + "\n")
@@ -441,33 +414,39 @@ def train_esvit(args):
             # tsne_video(fold_output_dir, fold_output_dir)
             # del tsne, features, labels, save_dict, train_stats, log_stats,
 
+        # ============ Linear evaluation ============
+
         load_pretrained_weights(model=de_parallel(teacher),
                                 pretrained_weights=best_w,
                                 checkpoint_key="teacher")
+        # Run the best pt.file
         run(train_loader=train_loader,
             val_loader=val_loader,
             model=de_parallel(teacher),
             args=args,
-            output_dir=fold_output_dir / f'best_linear',
+            save_dir=fold_output_dir / f'best_linear',
             epochs=100)
 
         load_pretrained_weights(model=de_parallel(teacher),
                                 pretrained_weights=last_w,
                                 checkpoint_key="teacher")
+
+        # Run the last pt.file
         run(train_loader=train_loader,
             val_loader=val_loader,
             model=de_parallel(teacher),
             args=args,
-            output_dir=fold_output_dir / f'last_linear',
+            save_dir=fold_output_dir / f'last_linear',
             epochs=100)
 
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+        torch.cuda.empty_cache()
         print('Training time {}'.format(total_time_str))
 
 
 @torch.no_grad()
-def get_features(val_loader, model, n, avgpool, depths):  # PyTorch在ImageNet上的pre-trained weight進行特徵萃取
+def get_features(val_loader, model, n, avgpool, depths):
     # we'll store the features as NumPy array of size num_images x feature_size
     metric_logger = MetricLogger(delimiter="  ")
 
@@ -489,13 +468,26 @@ def get_features(val_loader, model, n, avgpool, depths):  # PyTorch在ImageNet�
     return features, labels
 
 
-def train_one_epoch(student, teacher, dino_loss, data_loader,
-                    optimizer, lr_schedule, wd_schedule, momentum_schedule, epoch, mixup_fn,
-                    fp16_scaler, args):
+def train_one_epoch(
+        student,
+        teacher,
+        dino_loss,
+        data_loader,
+        optimizer,
+        lr_schedule,
+        wd_schedule,
+        momentum_schedule,
+        epoch,
+        scaler,
+        args):
+    student.train(), teacher.eval()
+    device = next(student.parameters()).device  # get model device
+
     metric_logger = MetricLogger(delimiter="  ")
     header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
     for it, batch in enumerate(metric_logger.log_every(data_loader, 10, header)):
         images = batch['img']
+
         # update weight decay and learning rate according to their schedule
         it = len(data_loader) * epoch + it  # global training iteration
         for i, param_group in enumerate(optimizer.param_groups):
@@ -504,85 +496,51 @@ def train_one_epoch(student, teacher, dino_loss, data_loader,
                 param_group["weight_decay"] = wd_schedule[it]
 
         # move images to gpu
-        images = [im.cuda(non_blocking=True) for im in images]
+        images = [im.to(device, non_blocking=True) for im in images]
 
-        # mixup for teacher model output
+        # teacher and student input
         teacher_input = images[:2]
-
-        if mixup_fn is not None:
-            student_input = []
-            targets_mixup = []
-            n_mix_views = 0
-            # print(f'number of images {len(images)}')
-            for samples in images:
-                targets = torch.arange(0, args.batch_size_per_gpu, dtype=torch.long).cuda(non_blocking=True)
-                if n_mix_views < args.num_mixup_views:
-                    samples, targets = mixup_fn(samples, targets)
-                    n_mix_views = n_mix_views + 1
-                else:
-                    targets = torch.eye(args.batch_size_per_gpu).cuda(non_blocking=True)
-
-                student_input.append(samples)
-                targets_mixup.append(targets)
-
-            del images, targets, samples
-
-        else:
-            student_input = images
-            targets_mixup = None
+        student_input = images
 
         # teacher and student forward passes + compute dino loss
-        with torch.cuda.amp.autocast(fp16_scaler is not None):
+        with torch.cuda.amp.autocast(scaler is not None):
             with torch.no_grad():
                 teacher_output = teacher(teacher_input)  # only the 2 global views pass through the teacher
             student_output = student(student_input)
-            loss, loss_items = dino_loss(student_output, teacher_output, epoch, targets_mixup)
+            loss, loss_items = dino_loss(student_output, teacher_output, epoch)
 
         if not math.isfinite(loss.item()):
             print("Loss is {}, stopping training".format(loss.item()))
-
             # ============ writing logs on a NaN for debug ... ============
             save_dict = {
                 'student': de_parallel(student).state_dict(),
                 'teacher': de_parallel(teacher).state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch + 1,
-                'args': args,
+                'args': vars(args),
                 'dino_loss': dino_loss.state_dict(),
             }
-            if fp16_scaler is not None:
-                save_dict['fp16_scaler'] = fp16_scaler.state_dict()
-            save_on_master(save_dict, os.path.join(args.output_dir, 'checkpoint_NaN.pth'))
+            if scaler is not None:
+                save_dict['scaler'] = scaler.state_dict()
+            save_on_master(save_dict, args.output_dir / 'checkpoint_nan.pth')
+            del save_dict
+            torch.cuda.empty_cache()
             sys.exit(1)
 
         # student update
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)  # unscale gradients
+        torch.nn.utils.clip_grad_norm_(student.parameters(), max_norm=10.0)  # clip gradients
+        scaler.step(optimizer)
+        scaler.update()
         optimizer.zero_grad()
-        param_norms = None
-        if fp16_scaler is None:
-            loss.backward()
-            time_sync()
-            if args.clip_grad:
-                param_norms = clip_gradients(student, args.clip_grad)
-            cancel_gradients_last_layer(epoch, student,
-                                        args.freeze_last_layer)
-            optimizer.step()
-        else:
-            fp16_scaler.scale(loss).backward()
-            time_sync()
-            if args.clip_grad:
-                fp16_scaler.unscale_(optimizer)  # unscale the gradients of optimizer's assigned params in-place
-                param_norms = clip_gradients(student, args.clip_grad)
-            cancel_gradients_last_layer(epoch, student,
-                                        args.freeze_last_layer)
-
-            fp16_scaler.step(optimizer)
-            fp16_scaler.update()
 
         # EMA update for the teacher
         with torch.no_grad():
             m = momentum_schedule[it]  # momentum parameter
-            for param_q, param_k in zip(de_parallel(student).parameters(), de_parallel(teacher).parameters()):
-                param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)
+            for name, param_q in de_parallel(student).named_parameters():
+                param_k = de_parallel(teacher).state_dict()[name]
+                param_k.mul_(m).add_((1 - m) * param_q.detach())
 
         # logging
         time_sync()
@@ -591,6 +549,7 @@ def train_one_epoch(student, teacher, dino_loss, data_loader,
         metric_logger.update(local_loss=loss_items[1])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
+
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)

@@ -214,7 +214,7 @@ def get_transform(args, name):
     elif name == "lymph_node_aug_overlapping":
         transform = DataAugmentationLymphNodeOverlapping(
             args.global_crops_scale,
-            (0.95, 1.00),
+            args.local_crops_scale,
             args.local_crops_number,
             args.local_crops_size
         )
