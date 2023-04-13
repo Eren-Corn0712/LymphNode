@@ -89,7 +89,7 @@ class DDINOLoss(nn.Module):
             np.ones(nepochs - warmup_teacher_temp_epochs) * teacher_temp
         ))
 
-    def forward(self, student_output, teacher_output, epoch, targets_mixup):
+    def forward(self, student_output, teacher_output, epoch):
         """
         Cross-entropy between softmax outputs of the teacher and student networks.
         """
@@ -145,9 +145,9 @@ class DDINOLoss(nn.Module):
                 region_sim_ind = region_sim_matrix.max(dim=2)[
                     1]  # B x T_s; collect the argmax index in teacher for a given student feature
 
-                t_indexed_region = torch.gather(t_region_cur, 1, region_sim_ind.unsqueeze(2).expand(-1, -1,
-                                                                                                    t_region_cur.size(
-                                                                                                        2)))  # B x T_s x K (index matrix: B, T_s, 1)
+                t_indexed_region = torch.gather(
+                    t_region_cur, 1, region_sim_ind.unsqueeze(2).expand(-1, -1, t_region_cur.size(
+                        2)))  # B x T_s x K (index matrix: B, T_s, 1)
 
                 loss_grid = torch.sum(- t_indexed_region * F.log_softmax(s_region_cur, dim=-1), dim=[-1]).mean(
                     -1)  # B x T_s x K --> B
@@ -157,6 +157,7 @@ class DDINOLoss(nn.Module):
 
                 n_loss_terms += 1
 
+        # global local
         total_loss[0] /= n_loss_terms
         total_loss[1] /= n_loss_terms
 

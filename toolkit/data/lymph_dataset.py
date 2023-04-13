@@ -27,30 +27,41 @@ def pil_loader(path: str) -> Image.Image:
 class LymphBaseDataset(Dataset, ABC):
     def __init__(self,
                  root,
-                 prefix=''
+                 prefix="",
                  ):
-        self.root = Path(root)
-        self.classes, self.class_to_idx = self.find_classes(self.root)
-        self.idx_to_class = {v: k for k, v in self.class_to_idx.items()}
-        self.labels = self.get_labels()
+        self.root = root
+        self.labels = self.get_labels(img_path=self.root)
         self.prefix = prefix
 
-    def get_labels(self):
+    def get_labels(self, img_path):
         labels = []
-        for cls in self.classes:
-            patient_id, _ = self.find_classes(self.root / cls)
-            for id in patient_id:
-                p = self.root / cls / id
-                files = glob.glob(str(p / '**' / '*.*'), recursive=True)
-                for f in files:
-                    d = dict(type_name=cls,
-                             label=self.class_to_idx[cls],
-                             id=id,
-                             im_file=f)
-                    labels.append(d)
+        try:
+            x = []
+            for p in img_path if isinstance(img_path, list) else [img_path]:
+                p = Path(p)
+                # Benign or Malignant
+                classes, class_to_idx = self.find_classes(str(p))
+                for cls in classes:
+                    # Find Patient id
+                    patient_ids, _ = self.find_classes(str(p / cls))
+                    for patient_id in patient_ids:
+                        search_p = p / cls / patient_id
+                        if search_p.is_dir():
+                            files = glob.glob(str(search_p / '**' / '*.*'), recursive=True)
+                            for f in files:
+                                d = dict(type_name=cls,
+                                         label=class_to_idx[cls],
+                                         patient_id=patient_id,
+                                         im_file=f)
+                                x.append(d)
+                        else:
+                            raise FileNotFoundError(f'{self.prefix}{p} does not exist')
 
-        labels = [l for l in labels if l['im_file'].split('.')[-1].lower() in IMG_FORMATS]
-        return labels
+            labels = [l for l in x if l['im_file'].split('.')[-1].lower() in IMG_FORMATS]
+            return labels
+
+        except Exception as e:
+            raise FileNotFoundError(f'Error loading data from {img_path}\n') from e
 
     @staticmethod
     def find_classes(directory) -> Tuple[List[str], Dict[str, int]]:
@@ -58,7 +69,7 @@ class LymphBaseDataset(Dataset, ABC):
 
 
 class KFoldLymphDataset(LymphBaseDataset):
-    def __init__(self, root, transform=None, n_splits=5, shuffle=False, random_state=None):
+    def __init__(self, root, transform=None, n_splits=3, shuffle=False, random_state=None):
         super().__init__(root)
         self.stratified_k_fold = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
         self.transform = transform
@@ -69,6 +80,9 @@ class KFoldLymphDataset(LymphBaseDataset):
             train_labels = list(np.array(self.labels)[train_idx])
             test_labels = list(np.array(self.labels)[test_idx])
             yield WrapperFoldDataset(train_labels), WrapperFoldDataset(test_labels)
+
+    def __len__(self):
+        return len(self.labels)
 
     def __getitem__(self, item):
         label = self.labels[item].copy()

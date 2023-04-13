@@ -4,8 +4,8 @@ import torchvision
 import torchvision.transforms.functional
 
 from torchvision.utils import make_grid
-plt.rcParams["savefig.bbox"] = 'tight'
 
+plt.rcParams["savefig.bbox"] = 'tight'
 
 
 def show(imgs, save_dir=None, fname=None):
@@ -20,6 +20,8 @@ def show(imgs, save_dir=None, fname=None):
 
     if save_dir is not None:
         fig.savefig(save_dir / f'{fname}.png', dpi=200)
+
+    plt.close()
 
 
 def scale_to_01_range(x):
