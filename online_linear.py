@@ -29,7 +29,7 @@ def run(
         args,
         save_dir,
         epochs=100,
-        lr=0.0005,
+        lr=0.001,
 ):
     if args.arch in swin_transformer.__dict__.keys():
         embed_dim = model.embed_dim

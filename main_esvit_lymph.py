@@ -25,7 +25,7 @@ from toolkit.utils.torch_utils import (init_seeds, de_parallel, has_batchnorms, 
                                        model_info, select_device, build_optimizer)
 
 from toolkit.utils.dist_utils import (init_distributed_mode, is_main_process,
-                                      get_world_size, save_on_master)
+                                      get_world_size, save_on_master, clearn_ddp)
 
 from toolkit.utils.logger import MetricLogger
 from toolkit.utils.loss import DDINOLoss, DINOLoss
@@ -441,7 +441,10 @@ def train_esvit(args):
 
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+
         torch.cuda.empty_cache()
+        clearn_ddp()
+
         print('Training time {}'.format(total_time_str))
 
 
