@@ -1,18 +1,27 @@
 import torch.nn as nn
 
+
 class DINOHead(nn.Module):
-    def __init__(self, in_dim, out_dim, use_bn=False, norm_last_layer=True, nlayers=3, hidden_dim=2048,
-                 bottleneck_dim=256):
+    def __init__(
+            self,
+            in_dim,
+            out_dim,
+            use_bn=False,
+            norm_last_layer=True,
+            num_layers=3,
+            hidden_dim=2048,
+            bottleneck_dim=256
+    ):
         super().__init__()
-        nlayers = max(nlayers, 1)
-        if nlayers == 1:
+        num_layers = max(num_layers, 1)
+        if num_layers == 1:
             self.mlp = nn.Linear(in_dim, bottleneck_dim)
         else:
             layers = [nn.Linear(in_dim, hidden_dim)]
             if use_bn:
                 layers.append(nn.BatchNorm1d(hidden_dim))
             layers.append(nn.GELU())
-            for _ in range(nlayers - 2):
+            for _ in range(num_layers - 2):
                 layers.append(nn.Linear(hidden_dim, hidden_dim))
                 if use_bn:
                     layers.append(nn.BatchNorm1d(hidden_dim))

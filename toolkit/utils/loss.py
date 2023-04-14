@@ -190,3 +190,13 @@ class DDINOLoss(nn.Module):
         # ema update
         self.center = self.center * self.center_momentum + batch_center * (1 - self.center_momentum)
         self.center_grid = self.center_grid * self.center_momentum + batch_grid_center * (1 - self.center_momentum)
+
+
+class CARELoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.mse_loss = nn.MSELoss()
+
+    def forward(self, student_output, teacher_output):
+        # TODO:Complete this part!
+        pass

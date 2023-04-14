@@ -25,7 +25,7 @@ from toolkit.utils.torch_utils import (init_seeds, de_parallel, has_batchnorms, 
                                        model_info, select_device, build_optimizer)
 
 from toolkit.utils.dist_utils import (init_distributed_mode, is_main_process,
-                                      get_world_size, save_on_master)
+                                      get_world_size, save_on_master, clearn_ddp)
 
 from toolkit.utils.logger import MetricLogger
 from toolkit.utils.loss import DDINOLoss, DINOLoss
@@ -219,6 +219,8 @@ def train_esvit(args):
             )
             teacher.head = DINOHead(teacher.num_features, args.out_dim, args.use_bn_in_head)
 
+            [setattr(x, "use_dense_prediction", args.use_dense_prediction) for x in (student, teacher)]
+
             setattr(student, "use_dense_prediction", args.use_dense_prediction)
             setattr(teacher, "use_dense_prediction", args.use_dense_prediction)
             if args.use_dense_prediction:
@@ -228,7 +230,10 @@ def train_esvit(args):
                     use_bn=args.use_bn_in_head,
                     norm_last_layer=args.norm_last_layer,
                 )
-                teacher.head_dense = DINOHead(teacher.num_features, args.out_dim, args.use_bn_in_head)
+                teacher.head_dense = DINOHead(
+                    teacher.num_features,
+                    args.out_dim,
+                    args.use_bn_in_head)
 
 
         # otherwise, we check if the architecture is in torchvision models
@@ -441,7 +446,10 @@ def train_esvit(args):
 
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+
         torch.cuda.empty_cache()
+        clearn_ddp()
+
         print('Training time {}'.format(total_time_str))
 
 
