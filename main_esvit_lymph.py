@@ -219,6 +219,8 @@ def train_esvit(args):
             )
             teacher.head = DINOHead(teacher.num_features, args.out_dim, args.use_bn_in_head)
 
+            [setattr(x, "use_dense_prediction", args.use_dense_prediction) for x in (student, teacher)]
+
             setattr(student, "use_dense_prediction", args.use_dense_prediction)
             setattr(teacher, "use_dense_prediction", args.use_dense_prediction)
             if args.use_dense_prediction:
@@ -228,7 +230,10 @@ def train_esvit(args):
                     use_bn=args.use_bn_in_head,
                     norm_last_layer=args.norm_last_layer,
                 )
-                teacher.head_dense = DINOHead(teacher.num_features, args.out_dim, args.use_bn_in_head)
+                teacher.head_dense = DINOHead(
+                    teacher.num_features,
+                    args.out_dim,
+                    args.use_bn_in_head)
 
 
         # otherwise, we check if the architecture is in torchvision models

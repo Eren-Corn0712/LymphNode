@@ -21,52 +21,44 @@ class ResnetWrapper(ResNet):
         # convert to list
         if not isinstance(x, list):
             x = [x]
-        idx_crops = torch.cumsum(torch.unique_consecutive(
-            torch.tensor([inp.shape[-1] for inp in x]),
-            return_counts=True,
-        )[1], 0)
+
+        view_sizes = [inp.shape[-1] for inp in x]
+        unique_sizes_count = torch.tensor(view_sizes).unique_consecutive(return_counts=True)[1]
+        idx_crops = unique_sizes_count.cumsum(0)
 
         if self.use_dense_prediction:
-            start_idx = 0
+            output_cls, output_fea, num_patch = [], [], []
 
-            for end_idx in idx_crops:
-                _out_cls, _out_fea = self.forward_features(torch.cat(x[start_idx: end_idx]))
-                B, N, C = _out_fea.shape
+            for start_idx, end_idx in zip([0] + idx_crops[:-1].tolist(), idx_crops.tolist()):
+                out_cls, out_fea = self.forward_features(torch.cat(x[start_idx: end_idx]))
 
-                if start_idx == 0:
-                    output_cls = _out_cls
-                    output_fea = _out_fea.reshape(B * N, C)
-                    npatch = [N]
-                else:
-                    output_cls = torch.cat((output_cls, _out_cls))
-                    output_fea = torch.cat((output_fea, _out_fea.reshape(B * N, C)))
-                    npatch.append(N)
-                start_idx = end_idx
+                # Concatenate the features across patches
+                B, N, C = out_fea.shape
+                output_cls.append(out_cls)
+                output_fea.append(out_fea.reshape(B * N, C))
+                num_patch.append(N)
 
-            return self.head(output_cls), self.head_dense(output_fea), output_fea, npatch
+            output_cls = torch.cat(output_cls)
+            output_fea = torch.cat(output_fea)
+
+            return self.head(output_cls), self.head_dense(output_fea), output_fea, num_patch
 
         else:
-            start_idx = 0
-            for end_idx in idx_crops:
-                _out = super().forward(torch.cat(x[start_idx: end_idx]))
-                if start_idx == 0:
-                    output = _out
-                else:
-                    output = torch.cat((output, _out))
-                start_idx = end_idx
-            # Run the head forward on the concatenated features.
+            output = []
+            for start_idx, end_idx in zip([0] + idx_crops[:-1].tolist(), idx_crops.tolist()):
+                out = super().forward(torch.cat(x[start_idx:end_idx]))
+                output.append(out)
             return self.head(output)
 
     def forward_features(self, x):
-
         x_region = self.forward_feature_map(x)
-        H, W = x_region.shape[-2], x_region.shape[-1]
 
+        h, w = x_region.shape[-2:]
         x = self.avgpool(x_region)
         x = torch.flatten(x, 1)
         x = self.fc(x)
 
-        return x, rearrange(x_region, 'b c h w -> b (h w) c', h=H, w=W)
+        return x, rearrange(x_region, 'b c h w -> b (h w) c', h=h, w=w)
 
     def forward_feature_map(self, x):
         x = self.conv1(x)
@@ -84,14 +76,17 @@ class ResnetWrapper(ResNet):
         output = []
         all_depths = sum(depths)
         block_idx = all_depths - n
+        # stage 1 forward
         x = self.maxpool(self.relu(self.bn1(self.conv1(x))))
-        for i in range(1, 5):
-            f = getattr(self, f"layer{i}")
-            for b in f:
-                x = b(x)
-                block_idx -= 1
-                if block_idx < 0:
-                    output.append(self.avgpool(x).squeeze())
+
+        # layer1 to 4 decomposition
+        layers = [getattr(self, f"layer{i}") for i in range(1, 5)]
+        blocks = [b for l in layers for b in l]
+
+        for idx, b in enumerate(blocks):
+            x = b(x)
+            if idx >= block_idx:
+                output.append(self.avgpool(x).flatten(1))
 
         return torch.cat(output, dim=1)
 
