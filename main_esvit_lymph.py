@@ -28,9 +28,11 @@ from toolkit.utils.dist_utils import (init_distributed_mode, is_main_process,
                                       get_world_size, save_on_master, clearn_ddp)
 
 from toolkit.utils.logger import MetricLogger
-from toolkit.utils.loss import DDINOLoss, DINOLoss
+from toolkit.utils.loss import build_loss
 from toolkit.utils.plots import show
 from toolkit.models.head import DINOHead
+from toolkit.models.care import CAREHead
+
 from toolkit.data.bulid_dataloader import build_dataloader
 from toolkit.data.augment import get_transform
 from torchvision.utils import make_grid
@@ -41,7 +43,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('EsViT', add_help=False)
 
     # Model parameters
-    parser.add_argument('--arch', default='resnet50', type=str,
+    parser.add_argument('--arch', default='resnet18', type=str,
                         help="""Name of architecture to train. For quick experiments with ViTs,
         we recommend using deit_tiny or deit_small.""")
     parser.add_argument('--patch_size', default=16, type=int, help="""Size in pixels
@@ -132,10 +134,7 @@ def get_args_parser():
 
     # Dataset
     parser.add_argument('--dataset', default="imagenet1k", type=str, help='Pre-training dataset.')
-    parser.add_argument('--zip_mode', type=bool_flag, default=False,
-                        help="""Whether or not to use zip file.""")
-    parser.add_argument('--tsv_mode', type=bool_flag, default=False,
-                        help="""Whether or not to use tsv file.""")
+
     parser.add_argument('--sampler', default="distributed", type=str, help='Sampler for dataloader.')
 
     # Misc
@@ -164,6 +163,10 @@ def get_args_parser():
     parser.add_argument('--num_labels', default=2, type=int, help='number of classes in a dataset')
     parser.add_argument('--val_freq', default=1, type=int, help="Epoch frequency for validation.")
     parser.add_argument('--device', default="cuda")
+
+    # additional loss
+    parser.add_argument('--use_attention_head', default=True, type=bool_flag)
+
     return parser
 
 
@@ -211,67 +214,60 @@ def train_esvit(args):
         if args.arch in swin_transformer.__dict__.keys():
             student = swin_transformer.__dict__[args.arch]()
             teacher = swin_transformer.__dict__[args.arch](is_teacher=True)
-            student.head = DINOHead(
-                student.num_features,
-                args.out_dim,
-                use_bn=args.use_bn_in_head,
-                norm_last_layer=args.norm_last_layer,
-            )
-            teacher.head = DINOHead(teacher.num_features, args.out_dim, args.use_bn_in_head)
 
-            [setattr(x, "use_dense_prediction", args.use_dense_prediction) for x in (student, teacher)]
-
-            setattr(student, "use_dense_prediction", args.use_dense_prediction)
-            setattr(teacher, "use_dense_prediction", args.use_dense_prediction)
-            if args.use_dense_prediction:
-                student.head_dense = DINOHead(
-                    student.num_features,
+            for model in [student, teacher]:
+                model.head = DINOHead(
+                    model.num_features,
                     args.out_dim,
                     use_bn=args.use_bn_in_head,
                     norm_last_layer=args.norm_last_layer,
                 )
-                teacher.head_dense = DINOHead(
-                    teacher.num_features,
-                    args.out_dim,
-                    args.use_bn_in_head)
-
+                if args.use_dense_prediction:
+                    setattr(model, "use_dense_prediction", args.use_dense_prediction)
+                    model.dense_head = DINOHead(
+                        model.num_features,
+                        args.out_dim,
+                        use_bn=args.use_bn_in_head,
+                        norm_last_layer=args.norm_last_layer)
 
         # otherwise, we check if the architecture is in torchvision models
         elif args.arch in resnet.__dict__.keys():
             student = resnet.__dict__[args.arch]()
             teacher = resnet.__dict__[args.arch]()
-            student.head = DINOHead(
-                student.num_features,
-                args.out_dim,
-                use_bn=args.use_bn_in_head,
-                norm_last_layer=args.norm_last_layer,
-            )
-            teacher.head = DINOHead(teacher.num_features, args.out_dim, args.use_bn_in_head)
-
-            setattr(student, "use_dense_prediction", args.use_dense_prediction)
-            setattr(teacher, "use_dense_prediction", args.use_dense_prediction)
-            if args.use_dense_prediction:
-                student.head_dense = DINOHead(
-                    student.num_features,
+            for model in [student, teacher]:
+                model.head = DINOHead(
+                    model.num_features,
                     args.out_dim,
                     use_bn=args.use_bn_in_head,
                     norm_last_layer=args.norm_last_layer,
                 )
-                teacher.head_dense = DINOHead(teacher.num_features, args.out_dim, args.use_bn_in_head)
+                if args.use_dense_prediction:
+                    setattr(model, "use_dense_prediction", args.use_dense_prediction)
+                    model.dense_head = DINOHead(
+                        model.num_features,
+                        args.out_dim,
+                        use_bn=args.use_bn_in_head,
+                        norm_last_layer=args.norm_last_layer)
 
+                if args.use_attention_head:
+                    setattr(model, "use_attention_head", args.use_attention_head)
+                    model.attn_head = CAREHead(
+                        model.num_features,
+                        args.out_dim,
+                        norm_last_layer=args.norm_last_layer
+                    )
         else:
-            raise ValueError(f"Unknow architecture: {args.arch}")
+            raise ValueError(f"Unknown architecture: {args.arch}")
 
-        # move networks to gpu
+        # Move Networks To GPU
         student, teacher = student.to(device), teacher.to(device)
 
         # synchronize batch norms (if any)
         if args.distributed:
-            if has_batchnorms(student):
-                student = nn.SyncBatchNorm.convert_sync_batchnorm(student)
-                teacher = nn.SyncBatchNorm.convert_sync_batchnorm(teacher)
-            teacher = nn.parallel.DistributedDataParallel(teacher, device_ids=[args.gpu])
-            student = nn.parallel.DistributedDataParallel(student, device_ids=[args.gpu])
+            for model in [student, teacher]:
+                if has_batchnorms(model):
+                    model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
+                model = nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
 
         # teacher and student start with the same weights
         de_parallel(teacher).load_state_dict(de_parallel(student).state_dict())
@@ -286,26 +282,8 @@ def train_esvit(args):
         model_info(de_parallel(student), imgsz=224)
 
         # ============ preparing loss ... ============
-        if args.use_dense_prediction:
-            # Both view and region level tasks are considered
-            dino_loss = DDINOLoss(
-                args.out_dim,
-                sum(args.local_crops_number) + 2,  # total number of crops = 2 global crops + local_crops_number
-                args.warmup_teacher_temp,
-                args.teacher_temp,
-                args.warmup_teacher_temp_epochs,
-                args.epochs,
-            ).to(device)
-        else:
-            # Only view level task is considered
-            dino_loss = DINOLoss(
-                args.out_dim,
-                sum(args.local_crops_number) + 2,  # total number of crops = 2 global crops + local_crops_number
-                args.warmup_teacher_temp,
-                args.teacher_temp,
-                args.warmup_teacher_temp_epochs,
-                args.epochs,
-            ).to(device)
+        criterion = build_loss(args, device)
+        print("Use loss function", ' '.join(criterion.keys()))
 
         # ============ preparing optimizer ... ============
         optimizer = build_optimizer(optimizer=args.optimizer, model=student)
@@ -342,7 +320,7 @@ def train_esvit(args):
                 teacher=de_parallel(teacher),
                 optimizer=optimizer,
                 scaler=scaler,
-                dino_loss=dino_loss,
+                criterion=criterion,
             )
             print(f'Resumed from {args.pretrained_weights_ckpt}')
 
@@ -353,7 +331,7 @@ def train_esvit(args):
             teacher=de_parallel(teacher),
             optimizer=optimizer,
             scaler=scaler,
-            dino_loss=dino_loss,
+            criterion=criterion,
         )
         start_epoch = to_restore["epoch"]
 
@@ -366,18 +344,10 @@ def train_esvit(args):
             if args.distributed:
                 data_loader.sampler.set_epoch(epoch)
             # ============ training one epoch of EsViT ... ============
-            train_stats = train_one_epoch(
-                student=student,
-                teacher=teacher,
-                dino_loss=dino_loss,
-                data_loader=data_loader,
-                optimizer=optimizer,
-                lr_schedule=lr_schedule,
-                wd_schedule=wd_schedule,
-                momentum_schedule=momentum_schedule,
-                epoch=epoch,
-                scaler=scaler,
-                args=args)
+            train_stats = train_one_epoch(student=student, teacher=teacher, criterion=criterion,
+                                          data_loader=data_loader, optimizer=optimizer, lr_schedule=lr_schedule,
+                                          wd_schedule=wd_schedule, momentum_schedule=momentum_schedule, epoch=epoch,
+                                          scaler=scaler, args=args)
 
             # ============ writing logs ... ============
             save_dict = {
@@ -386,7 +356,7 @@ def train_esvit(args):
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch + 1,
                 'args': vars(args),
-                'dino_loss': dino_loss.state_dict(),
+                **{f"{k}": v.state_dict() for k, v in criterion.items()}
             }
             if scaler is not None:
                 save_dict['scaler'] = scaler.state_dict()
@@ -476,23 +446,13 @@ def get_features(val_loader, model, n, avgpool, depths):
     return features, labels
 
 
-def train_one_epoch(
-        student,
-        teacher,
-        dino_loss,
-        data_loader,
-        optimizer,
-        lr_schedule,
-        wd_schedule,
-        momentum_schedule,
-        epoch,
-        scaler,
-        args):
+def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
+                    epoch, scaler, args):
     student.train(), teacher.eval()
     device = next(student.parameters()).device  # get model device
 
     metric_logger = MetricLogger(delimiter="  ")
-    header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
+    header = 'Epoch: {}/{}'.format(epoch, args.epochs)
     for it, batch in enumerate(metric_logger.log_every(data_loader, 10, header)):
         images = batch['img']
 
@@ -515,10 +475,31 @@ def train_one_epoch(
             with torch.no_grad():
                 teacher_output = teacher(teacher_input)  # only the 2 global views pass through the teacher
             student_output = student(student_input)
-            loss, loss_items = dino_loss(student_output, teacher_output, epoch)
+            total_loss = torch.zeros(1, device=device)
+            total_items = {}
+            for loss_key, loss_fun in criterion.items():
+                if loss_key == "ddino_loss":
+                    loss, loss_items = loss_fun(
+                        s_cls_out=student_output["head"],
+                        s_region_out=student_output["dense_head"],
+                        s_fea=student_output["output_fea"],
+                        s_npatch=student_output["num_patch"],
+                        t_cls_out=teacher_output["head"],
+                        t_region_out=teacher_output["dense_head"],
+                        t_fea=teacher_output["output_fea"],
+                        t_npatch=teacher_output["num_patch"],
+                        epoch=epoch
+                    )
+                    total_loss += loss
+                    total_items = {**total_items, **loss_items}
+                if loss_key == "attn_loss":
+                    loss, loss_items = loss_fun(student_output=student_output["attn_head"],
+                                                teacher_output=teacher_output["attn_head"])
+                    total_loss += loss
+                    total_items = {**total_items, **loss_items}
 
-        if not math.isfinite(loss.item()):
-            print("Loss is {}, stopping training".format(loss.item()))
+        if not math.isfinite(total_loss.item()):
+            print("Loss is {}, stopping training".format(total_loss.item()))
             # ============ writing logs on a NaN for debug ... ============
             save_dict = {
                 'student': de_parallel(student).state_dict(),
@@ -526,7 +507,7 @@ def train_one_epoch(
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch + 1,
                 'args': vars(args),
-                'dino_loss': dino_loss.state_dict(),
+                'dino_loss': criterion.state_dict(),
             }
             if scaler is not None:
                 save_dict['scaler'] = scaler.state_dict()
@@ -536,7 +517,7 @@ def train_one_epoch(
             sys.exit(1)
 
         # student update
-        scaler.scale(loss).backward()
+        scaler.scale(total_loss).backward()
         scaler.unscale_(optimizer)  # unscale gradients
         torch.nn.utils.clip_grad_norm_(student.parameters(), max_norm=10.0)  # clip gradients
         scaler.step(optimizer)
@@ -552,9 +533,8 @@ def train_one_epoch(
 
         # logging
         time_sync()
-        metric_logger.update(loss=loss_items.sum())
-        metric_logger.update(global_loss=loss_items[0])
-        metric_logger.update(local_loss=loss_items[1])
+        metric_logger.update(loss=torch.sum(torch.cat([v.unsqueeze(0) for v in loss_items.values()])))
+        metric_logger.update(**loss_items)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
 

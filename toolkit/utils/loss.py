@@ -5,6 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 
+from typing import Dict
+
 
 class DINOLoss(nn.Module):
     def __init__(self, out_dim, ncrops, warmup_teacher_temp, teacher_temp,
@@ -89,13 +91,19 @@ class DDINOLoss(nn.Module):
             np.ones(nepochs - warmup_teacher_temp_epochs) * teacher_temp
         ))
 
-    def forward(self, student_output, teacher_output, epoch):
+    def forward(self,
+                s_cls_out,
+                s_region_out,
+                s_fea,
+                s_npatch,
+                t_cls_out,
+                t_region_out,
+                t_fea,
+                t_npatch,
+                epoch):
         """
         Cross-entropy between softmax outputs of the teacher and student networks.
         """
-
-        s_cls_out, s_region_out, s_fea, s_npatch = student_output
-        t_cls_out, t_region_out, t_fea, t_npatch = teacher_output
 
         # teacher centering and sharpening
         temp = self.teacher_temp_schedule[epoch]
@@ -163,7 +171,7 @@ class DDINOLoss(nn.Module):
 
         self.update_center(t_cls_out, t_region_out)
 
-        return total_loss.sum(), total_loss.detach()
+        return total_loss.sum(), {"global_loss": total_loss[0].detach(), "local_loss": total_loss[1].detach()}
 
     @torch.inference_mode()
     def update_center(self, teacher_output, teacher_grid_output):
@@ -198,5 +206,46 @@ class CARELoss(nn.Module):
         self.mse_loss = nn.MSELoss()
 
     def forward(self, student_output, teacher_output):
-        # TODO:Complete this part!
-        pass
+        student_output = list(student_output[0] + student_output[1])
+        teacher_output = list(teacher_output[0])
+
+        s_global_attn, s_global_p = student_output[0], student_output[1]
+        s_local_attn, s_local_p = student_output[2], student_output[3]
+
+        t_global_attn, t_global_p = teacher_output[0], teacher_output[1]
+
+
+        print("ok")
+
+        return None, None
+
+
+def build_loss(args, device) -> Dict:
+    criterion = {}
+
+    if args.use_dense_prediction:
+        # Both view and region level tasks are considered
+        criterion["ddino_loss"] = DDINOLoss(
+            args.out_dim,
+            sum(args.local_crops_number) + 2,  # total number of crops = 2 global crops + local_crops_number
+            args.warmup_teacher_temp,
+            args.teacher_temp,
+            args.warmup_teacher_temp_epochs,
+            args.epochs,
+        ).to(device)
+    else:
+        # Only view level task is considered
+        criterion["dino_loss"] = DINOLoss(
+            args.out_dim,
+            sum(args.local_crops_number) + 2,  # total number of crops = 2 global crops + local_crops_number
+            args.warmup_teacher_temp,
+            args.teacher_temp,
+            args.warmup_teacher_temp_epochs,
+            args.epochs,
+        ).to(device)
+
+    if args.use_attention_head:
+        criterion["attn_loss"] = CARELoss(
+        )
+
+    return criterion
