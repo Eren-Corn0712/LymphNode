@@ -17,7 +17,7 @@ class TestResNet(object):
         model = resnet18().to(self.device)
         model.use_dense_prediction = True
         model.head = nn.Identity()
-        model.head_dense = nn.Identity()
+        model.dense_head = nn.Identity()
         b, c = 10, 3
         input = [torch.randn(b, c, i, i).to(self.device) for i in [224, 224, 96, 96, 96, 96]]
         l = len(input)

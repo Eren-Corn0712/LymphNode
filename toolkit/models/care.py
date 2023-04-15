@@ -38,8 +38,12 @@ class CAREHead(nn.Module):
             nhead=num_heads,
             dim_feedforward=dim_feedforward,
             dropout=0.1,
-            activation=F.gelu)] * 2
+            activation=F.gelu,
+            batch_first=True)] * 2
 
+        self.encoder_layer = nn.Sequential(*layers)
+
+        layers = []
         layers.append(Permute([0, 2, 1]))  # b, h * w, c -> b, c, h *  w
         layers.append(nn.AdaptiveAvgPool1d(1))  # b, c, h * w -> b, c, 1
         layers.append(nn.Flatten(1))  # b, c, 1 -> b, c
@@ -55,7 +59,8 @@ class CAREHead(nn.Module):
             self.last_layer.weight_g.requires_grad = False
 
     def forward(self, x):
-        x = self.layers(x)
+        attn = self.encoder_layer(x)
+        x = self.layers(attn)
         x = F.normalize(x, p=2, dim=-1)
         x = self.last_layer(x)
-        return x
+        return attn, x

@@ -23,7 +23,7 @@ class TestSwinTransformer(unittest.TestCase):
     def test_multi_forward_pass(self):
         model = swin_custom().to(self.device)
         model.head = nn.Identity()
-        model.head_dense = nn.Identity()
+        model.dense_head = nn.Identity()
         model.use_dense_prediction = True
         output = model(self.input)
         self.assertEqual(output[0].shape, torch.Size((len(self.input) * self.b, 768)))

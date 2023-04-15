@@ -98,26 +98,25 @@ class MetricLogger:
             header = ""
         start_time = time.time()
         end = time.time()
-        iter_time = SmoothedValue(fmt="{avg:.4f}")
-        data_time = SmoothedValue(fmt="{avg:.4f}")
+        iter_time = SmoothedValue(fmt="{avg:.3f}")
+        data_time = SmoothedValue(fmt="{avg:.3f}")
         space_fmt = ":" + str(len(str(len(iterable)))) + "d"
         if torch.cuda.is_available():
             log_msg = self.delimiter.join(
                 [
                     header,
-                    "[{0" + space_fmt + "}/{1}]",
+                    "{0" + space_fmt + "}/{1}",
                     "eta: {eta}",
                     "{meters}",
                     "time: {time}",
                     "data: {data}",
-                    "max mem: {memory:.0f}",
+                    "GPU mem: {memory:.3g} GB",
                 ]
             )
         else:
             log_msg = self.delimiter.join(
-                [header, "[{0" + space_fmt + "}/{1}]", "eta: {eta}", "{meters}", "time: {time}", "data: {data}"]
+                [header, "{0" + space_fmt + "}/{1}", "eta: {eta}", "{meters}", "time: {time}", "data: {data}"]
             )
-        MB = 1024.0 * 1024.0
         for obj in iterable:
             data_time.update(time.time() - end)
             yield obj
@@ -132,9 +131,9 @@ class MetricLogger:
                             len(iterable),
                             eta=eta_string,
                             meters=str(self),
-                            time=str(iter_time),
-                            data=str(data_time),
-                            memory=torch.cuda.max_memory_allocated() / MB,
+                            time=iter_time,
+                            data=data_time,
+                            memory=torch.cuda.memory_reserved() / 1E9,
                         )
                     )
                 else:

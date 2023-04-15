@@ -26,29 +26,38 @@ class ResnetWrapper(ResNet):
         unique_sizes_count = torch.tensor(view_sizes).unique_consecutive(return_counts=True)[1]
         idx_crops = unique_sizes_count.cumsum(0)
 
-        if self.use_dense_prediction:
-            output_cls, output_fea, num_patch = [], [], []
+        output = {}
+        output_cls, output_fea, num_patch = [], [], []
+        attn_head = []
+        # Multi view forward
+        for start_idx, end_idx in zip([0] + idx_crops[:-1].tolist(), idx_crops.tolist()):
+            out_cls, out_fea = self.forward_features(torch.cat(x[start_idx: end_idx]))
 
-            for start_idx, end_idx in zip([0] + idx_crops[:-1].tolist(), idx_crops.tolist()):
-                out_cls, out_fea = self.forward_features(torch.cat(x[start_idx: end_idx]))
+            # Concatenate the features across patches
+            batch_size, num_fea, channel = out_fea.shape
+            output_cls.append(out_cls)
+            output_fea.append(out_fea.reshape(batch_size * num_fea, channel))
 
-                # Concatenate the features across patches
-                B, N, C = out_fea.shape
-                output_cls.append(out_cls)
-                output_fea.append(out_fea.reshape(B * N, C))
-                num_patch.append(N)
+            if hasattr(self, "attn_head"):
+                attn_head.append(getattr(self, "attn_head")(out_fea))
 
-            output_cls = torch.cat(output_cls)
-            output_fea = torch.cat(output_fea)
+            # Record batch size
+            num_patch.append(num_fea)
+            del out_cls, out_fea
 
-            return self.head(output_cls), self.head_dense(output_fea), output_fea, num_patch
+        output_cls = torch.cat(output_cls)  # global view(2b, cout) global + local (10b,cout)
+        output_fea = torch.cat(output_fea)
 
-        else:
-            output = []
-            for start_idx, end_idx in zip([0] + idx_crops[:-1].tolist(), idx_crops.tolist()):
-                out = super().forward(torch.cat(x[start_idx:end_idx]))
-                output.append(out)
-            return self.head(output)
+        if hasattr(self, "head"):
+            output["head"] = getattr(self, 'head')(output_cls)
+
+        if hasattr(self, "dense_head"):
+            output["dense_head"] = getattr(self, 'dense_head')(output_fea)
+
+        output["output_fea"] = output_fea
+        output["num_patch"] = num_patch
+        output["attn_head"] = attn_head
+        return output
 
     def forward_features(self, x):
         x_region = self.forward_feature_map(x)
