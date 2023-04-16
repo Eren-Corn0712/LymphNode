@@ -451,11 +451,9 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
     student.train(), teacher.eval()
     device = next(student.parameters()).device  # get model device
 
-    metric_logger = MetricLogger(delimiter="  ")
+    metric_logger = MetricLogger(delimiter=" ")
     header = 'Epoch: {}/{}'.format(epoch, args.epochs)
     for it, batch in enumerate(metric_logger.log_every(data_loader, 10, header)):
-        images = batch['img']
-
         # update weight decay and learning rate according to their schedule
         it = len(data_loader) * epoch + it  # global training iteration
         for i, param_group in enumerate(optimizer.param_groups):
@@ -464,7 +462,7 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
                 param_group["weight_decay"] = wd_schedule[it]
 
         # move images to gpu
-        images = [im.to(device, non_blocking=True) for im in images]
+        images = [im.to(device, non_blocking=True) for im in batch['img']]
 
         # teacher and student input
         teacher_input = images[:2]
@@ -492,9 +490,11 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
                     )
                     total_loss += loss
                     total_items = {**total_items, **loss_items}
+
                 if loss_key == "attn_loss":
                     loss, loss_items = loss_fun(student_output=student_output["attn_head"],
-                                                teacher_output=teacher_output["attn_head"])
+                                                teacher_output=teacher_output["attn_head"],
+                                                epoch=epoch)
                     total_loss += loss
                     total_items = {**total_items, **loss_items}
 

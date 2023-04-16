@@ -20,6 +20,7 @@ class LinearLayer(nn.Module):
         return self.act(self.bn(self.linear(x)))
 
 
+# TODO: Implementation the new transformer encoder head.
 class CAREHead(nn.Module):
     def __init__(
             self,

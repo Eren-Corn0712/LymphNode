@@ -106,11 +106,11 @@ class DDINOLoss(nn.Module):
         """
 
         # teacher centering and sharpening
-        temp = self.teacher_temp_schedule[epoch]
-        t_cls = F.softmax((t_cls_out - self.center) / temp, dim=-1)
+        teacher_temp = self.teacher_temp_schedule[epoch]
+        t_cls = F.softmax((t_cls_out - self.center) / teacher_temp, dim=-1)
         t_cls = t_cls.detach().chunk(2)
 
-        t_region = F.softmax((t_region_out - self.center_grid) / temp, dim=-1)
+        t_region = F.softmax((t_region_out - self.center_grid) / teacher_temp, dim=-1)
         t_region = t_region.detach().chunk(2)
         t_fea = t_fea.chunk(2)
 
@@ -201,23 +201,76 @@ class DDINOLoss(nn.Module):
 
 
 class CARELoss(nn.Module):
-    def __init__(self):
+    def __init__(self, out_dim, ncrops, warmup_teacher_temp, teacher_temp,
+                 warmup_teacher_temp_epochs, nepochs, student_temp=0.1,
+                 center_momentum=0.9):
         super().__init__()
+        self.student_temp = student_temp
+        self.center_momentum = center_momentum
+        self.ncrops = ncrops
+        self.register_buffer("center", torch.zeros(1, out_dim))
+
+        # we apply a warm up for the teacher temperature because
+        # a too high temperature makes the training instable at the beginning
+        self.teacher_temp_schedule = np.concatenate((
+            np.linspace(warmup_teacher_temp,
+                        teacher_temp, warmup_teacher_temp_epochs),
+            np.ones(nepochs - warmup_teacher_temp_epochs) * teacher_temp
+        ))
         self.mse_loss = nn.MSELoss()
 
-    def forward(self, student_output, teacher_output):
+    def forward(self, student_output, teacher_output, epoch):
+        teacher_temp = self.teacher_temp_schedule[epoch]
+
         student_output = list(student_output[0] + student_output[1])
         teacher_output = list(teacher_output[0])
 
         s_global_attn, s_global_p = student_output[0], student_output[1]
         s_local_attn, s_local_p = student_output[2], student_output[3]
 
-        t_global_attn, t_global_p = teacher_output[0], teacher_output[1]
+        t_global_attn, t_global_p = teacher_output[0].detach(), teacher_output[
+            1].detach()  # Teacher feature should not grad
 
-        # TODO:Complete this part
-        print("ok")
+        s_global_p = s_global_p / self.student_temp
+        s_local_p = s_local_p / self.student_temp
+        t_global_p = F.softmax((t_global_p - self.center) / teacher_temp, dim=-1)
 
-        return None, None
+        total_loss = torch.zeros(2, device=t_global_attn.device)
+
+        n_loss_terms = 0
+        for t_idx, t_p in enumerate(t_global_p):
+            for s_dix, s_p in enumerate(torch.cat([s_global_p, s_local_p], dim=0)):
+                if t_idx == s_dix:
+                    continue
+                loss = torch.sum(-t_p * F.log_softmax(s_p, dim=-1), dim=-1)
+                total_loss[0] += loss.mean()
+                n_loss_terms += 1
+
+        n_loss_terms = 0
+        for t_idx, t_attn in enumerate(t_global_attn):
+            for s_dix, s_attn in enumerate(torch.cat([s_global_attn], dim=0)):
+                if t_idx == s_dix:
+                    continue
+                loss = self.mse_loss(t_attn, s_attn)
+                total_loss[1] += loss
+                n_loss_terms += 1
+
+        total_loss[0] = total_loss[0] / n_loss_terms
+        total_loss[1] = total_loss[1] / n_loss_terms
+        self.update_center(t_global_p)
+        return total_loss.sum(), {"c_loss": total_loss[0].detach(), "attn_loss": total_loss[1].detach()}
+
+    @torch.inference_mode()
+    def update_center(self, teacher_output):
+        # view level center update
+        batch_center = torch.sum(teacher_output, dim=0, keepdim=True)
+        if dist.is_initialized():
+            dist.all_reduce(batch_center)
+            batch_center = batch_center / (len(teacher_output) * dist.get_world_size())
+        else:
+            batch_center = torch.mean(batch_center, dim=0, keepdim=True)
+        # ema update
+        self.center = self.center * self.center_momentum + batch_center * (1 - self.center_momentum)
 
 
 def build_loss(args, device) -> Dict:
@@ -246,6 +299,12 @@ def build_loss(args, device) -> Dict:
 
     if args.use_attention_head:
         criterion["attn_loss"] = CARELoss(
-        )
+            args.out_dim,
+            sum(args.local_crops_number) + 2,  # total number of crops = 2 global crops + local_crops_number
+            args.warmup_teacher_temp,
+            args.teacher_temp,
+            args.warmup_teacher_temp_epochs,
+            args.epochs,
+        ).to(device)
 
     return criterion
