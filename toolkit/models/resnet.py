@@ -38,7 +38,8 @@ class ResnetWrapper(ResNet):
             output_cls.append(out_cls)
             output_fea.append(out_fea.reshape(batch_size * num_fea, channel))
 
-            if hasattr(self, "attn_head"):
+            # Only forward global view
+            if hasattr(self, "attn_head") and num_fea == (224 // 32) ** 2:
                 attn_head.append(getattr(self, "attn_head")(out_fea))
 
             # Record batch size
@@ -47,6 +48,7 @@ class ResnetWrapper(ResNet):
 
         output_cls = torch.cat(output_cls)  # global view(2b, cout) global + local (10b,cout)
         output_fea = torch.cat(output_fea)
+        attn_head = torch.cat(attn_head)
 
         if hasattr(self, "head"):
             output["head"] = getattr(self, 'head')(output_cls)

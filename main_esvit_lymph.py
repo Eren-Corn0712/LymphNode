@@ -25,13 +25,13 @@ from toolkit.utils.torch_utils import (init_seeds, de_parallel, has_batchnorms, 
                                        model_info, select_device, build_optimizer)
 
 from toolkit.utils.dist_utils import (init_distributed_mode, is_main_process,
-                                      get_world_size, save_on_master, clearn_ddp)
+                                      get_world_size, save_on_master)
 
 from toolkit.utils.logger import MetricLogger
 from toolkit.utils.loss import build_loss
 from toolkit.utils.plots import show
 from toolkit.models.head import DINOHead
-from toolkit.models.care import CAREHead
+from toolkit.models.care import AttnHead
 
 from toolkit.data.bulid_dataloader import build_dataloader
 from toolkit.data.augment import get_transform
@@ -89,7 +89,7 @@ def get_args_parser():
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
         gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
         help optimization for larger ViT architectures. 0 for disabling.""")
-    parser.add_argument('--batch_size_per_gpu', default=1, type=int,
+    parser.add_argument('--batch_size_per_gpu', default=16, type=int,
                         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
     parser.add_argument('--epochs', default=100, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
@@ -188,16 +188,19 @@ def train_esvit(args):
 
         # transformation for backbone, train linear, test linear
         backbone_dataset = deepcopy(train_set)
+
+        backbone_dataset.transform = get_transform(args, args.aug_opt)
         train_set.transform = get_transform(args, "eval_train")
         test_set.transform = get_transform(args, "eval_test")
-        backbone_dataset.transform = get_transform(args, args.aug_opt)
 
         data_loader, train_loader, val_loader = build_dataloader(args, backbone_dataset, train_set, test_set)
 
-        views, train_imgs, val_imgs = next(iter(data_loader))['img'], next(iter(train_loader))['img'], next(
-            iter(val_loader))['img']
-
         if is_main_process():
+            # May be have bug....
+            views = next(iter(data_loader))['img']
+            train_imgs = next(iter(train_loader))['img']
+            val_imgs = next(iter(val_loader))['img']
+
             show_num = min(4, args.batch_size_per_gpu)
             for i in range(show_num):
                 global_view = [view[i] for view in views[:2]]
@@ -251,7 +254,7 @@ def train_esvit(args):
 
                 if args.use_attention_head:
                     setattr(model, "use_attention_head", args.use_attention_head)
-                    model.attn_head = CAREHead(
+                    model.attn_head = AttnHead(
                         model.num_features,
                         args.out_dim,
                         norm_last_layer=args.norm_last_layer
@@ -418,8 +421,6 @@ def train_esvit(args):
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
 
         torch.cuda.empty_cache()
-        clearn_ddp()
-
         print('Training time {}'.format(total_time_str))
 
 
@@ -492,8 +493,8 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
                     total_items = {**total_items, **loss_items}
 
                 if loss_key == "attn_loss":
-                    loss, loss_items = loss_fun(student_output=student_output["attn_head"],
-                                                teacher_output=teacher_output["attn_head"],
+                    loss, loss_items = loss_fun(s_attn_out=student_output["attn_head"],
+                                                t_attn_out=teacher_output["attn_head"],
                                                 epoch=epoch)
                     total_loss += loss
                     total_items = {**total_items, **loss_items}
@@ -507,7 +508,7 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch + 1,
                 'args': vars(args),
-                'dino_loss': criterion.state_dict(),
+                **{f"{k}": v.state_dict() for k, v in criterion.items()}
             }
             if scaler is not None:
                 save_dict['scaler'] = scaler.state_dict()
@@ -533,8 +534,8 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
 
         # logging
         time_sync()
-        metric_logger.update(loss=torch.sum(torch.cat([v.unsqueeze(0) for v in loss_items.values()])))
-        metric_logger.update(**loss_items)
+        metric_logger.update(loss=sum([v for v in total_items.values()]))
+        metric_logger.update(**total_items)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
 

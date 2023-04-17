@@ -171,7 +171,9 @@ class DDINOLoss(nn.Module):
 
         self.update_center(t_cls_out, t_region_out)
 
-        return total_loss.sum(), {"global_loss": total_loss[0].detach(), "local_loss": total_loss[1].detach()}
+        return total_loss.sum(), \
+            {"global_loss": total_loss[0].item(),
+             "local_loss": total_loss[1].item()}
 
     @torch.inference_mode()
     def update_center(self, teacher_output, teacher_grid_output):
@@ -219,58 +221,24 @@ class CARELoss(nn.Module):
         ))
         self.mse_loss = nn.MSELoss()
 
-    def forward(self, student_output, teacher_output, epoch):
+    def forward(self, s_attn_out, t_attn_out, epoch):
         teacher_temp = self.teacher_temp_schedule[epoch]
+        t_attn_out = t_attn_out.detach().chunk(2)
+        s_attn_out = s_attn_out.chunk(2)
 
-        student_output = list(student_output[0] + student_output[1])
-        teacher_output = list(teacher_output[0])
-
-        s_global_attn, s_global_p = student_output[0], student_output[1]
-        s_local_attn, s_local_p = student_output[2], student_output[3]
-
-        t_global_attn, t_global_p = teacher_output[0].detach(), teacher_output[
-            1].detach()  # Teacher feature should not grad
-
-        s_global_p = s_global_p / self.student_temp
-        s_local_p = s_local_p / self.student_temp
-        t_global_p = F.softmax((t_global_p - self.center) / teacher_temp, dim=-1)
-
-        total_loss = torch.zeros(2, device=t_global_attn.device)
-
+        total_loss = torch.zeros(1, device=s_attn_out[0].device)
         n_loss_terms = 0
-        for t_idx, t_p in enumerate(t_global_p):
-            for s_dix, s_p in enumerate(torch.cat([s_global_p, s_local_p], dim=0)):
-                if t_idx == s_dix:
-                    continue
-                loss = torch.sum(-t_p * F.log_softmax(s_p, dim=-1), dim=-1)
-                total_loss[0] += loss.mean()
-                n_loss_terms += 1
-
-        n_loss_terms = 0
-        for t_idx, t_attn in enumerate(t_global_attn):
-            for s_dix, s_attn in enumerate(torch.cat([s_global_attn], dim=0)):
-                if t_idx == s_dix:
+        for t_idx, t_attn in enumerate(t_attn_out):
+            for s_idx, s_attn in enumerate(s_attn_out):
+                if t_idx == s_idx:
                     continue
                 loss = self.mse_loss(t_attn, s_attn)
-                total_loss[1] += loss
+                total_loss[0] += loss
                 n_loss_terms += 1
 
         total_loss[0] = total_loss[0] / n_loss_terms
-        total_loss[1] = total_loss[1] / n_loss_terms
-        self.update_center(t_global_p)
-        return total_loss.sum(), {"c_loss": total_loss[0].detach(), "attn_loss": total_loss[1].detach()}
 
-    @torch.inference_mode()
-    def update_center(self, teacher_output):
-        # view level center update
-        batch_center = torch.sum(teacher_output, dim=0, keepdim=True)
-        if dist.is_initialized():
-            dist.all_reduce(batch_center)
-            batch_center = batch_center / (len(teacher_output) * dist.get_world_size())
-        else:
-            batch_center = torch.mean(batch_center, dim=0, keepdim=True)
-        # ema update
-        self.center = self.center * self.center_momentum + batch_center * (1 - self.center_momentum)
+        return total_loss.sum(), {"attn_loss": total_loss[0].item()}
 
 
 def build_loss(args, device) -> Dict:

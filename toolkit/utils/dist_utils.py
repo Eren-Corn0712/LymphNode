@@ -59,11 +59,6 @@ def save_on_master(*args, **kwargs):
         torch.save(*args, **kwargs)
 
 
-def clearn_ddp():
-    if is_dist_avail_and_initialized():
-        dist.destroy_process_group()
-
-
 def init_distributed_mode(args):
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
         args.rank = int(os.environ["RANK"])

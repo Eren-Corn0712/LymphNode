@@ -2,7 +2,7 @@ import unittest
 
 import torch
 from toolkit.utils.torch_utils import select_device
-from toolkit.models.care import CAREHead
+from toolkit.models.care import AttnHead
 
 
 class TestSwinTransformer(unittest.TestCase):
@@ -14,7 +14,7 @@ class TestSwinTransformer(unittest.TestCase):
         self.input = torch.randn(self.b, 49 * 49, 768, device=self.device)
 
     def test_head_forward(self):
-        head = CAREHead(768, 2048).to(self.device)
+        head = AttnHead(768, 2048).to(self.device)
         output = head(self.input)
 
         self.assertEqual(first=output.shape,
