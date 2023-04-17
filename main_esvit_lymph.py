@@ -9,13 +9,13 @@ import json
 import torch
 import torch.nn as nn
 import numpy as np
-import torchvision
+
+import torch.backends.cuda
+
 import toolkit.models.swin_transformer as swin_transformer
 import toolkit.models.resnet as resnet
 
-from pathlib import Path
-from copy import deepcopy
-
+from sklearn.metrics import classification_report
 from toolkit.data.lymph_dataset import KFoldLymphDataset
 
 from toolkit.utils import yaml_load, yaml_save, yaml_print, bool_flag
@@ -36,7 +36,11 @@ from toolkit.models.care import AttnHead
 from toolkit.data.bulid_dataloader import build_dataloader
 from toolkit.data.augment import get_transform
 from torchvision.utils import make_grid
+
 from online_linear import run
+
+from pathlib import Path
+from copy import deepcopy
 
 
 def get_args_parser():
@@ -91,7 +95,7 @@ def get_args_parser():
         help optimization for larger ViT architectures. 0 for disabling.""")
     parser.add_argument('--batch_size_per_gpu', default=16, type=int,
                         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
-    parser.add_argument('--epochs', default=100, type=int, help='Number of epochs of training.')
+    parser.add_argument('--epochs', default=30, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
         during which we keep the output layer fixed. Typically doing so during
         the first epoch helps training. Try increasing this value if the loss does not decrease.""")
@@ -143,7 +147,7 @@ def get_args_parser():
 
     parser.add_argument('--pretrained_weights_ckpt', default='', type=str,
                         help="Path to pretrained weights to evaluate.")
-    parser.add_argument('--output_dir', default="runs/debug", type=str, help='Path to save logs and checkpoints.')
+    parser.add_argument('--save_dir', default="runs/debug", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
     parser.add_argument('--num_workers', default=0, type=int, help='Number of data loading workers per GPU.')
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
@@ -175,16 +179,18 @@ def train_esvit(args):
     init_distributed_mode(args)
     init_seeds(args.seed)
 
-    yaml_save(Path(args.output_dir) / 'args.yaml', data=vars(args))
-    yaml_print(Path(args.output_dir) / 'args.yaml')
+    yaml_save(Path(args.save_dir) / 'args.yaml', data=vars(args))
+    yaml_print(Path(args.save_dir) / 'args.yaml')
+
+    folder_result = {}
 
     device = torch.device(args.device)
     # ============ preparing data ... ============
     k_fold_dataset = KFoldLymphDataset(args.data_path)
     for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
         # Create folder output file
-        fold_output_dir = Path(args.output_dir) / f'{k + 1}-fold'
-        fold_output_dir.mkdir(parents=True, exist_ok=True)
+        fold_save_dir = Path(args.save_dir) / f'{k + 1}-fold'
+        fold_save_dir.mkdir(parents=True, exist_ok=True)
 
         # transformation for backbone, train linear, test linear
         backbone_dataset = deepcopy(train_set)
@@ -205,10 +211,10 @@ def train_esvit(args):
             for i in range(show_num):
                 global_view = [view[i] for view in views[:2]]
                 local_view = [view[i] for view in views[2:]]
-                show(make_grid(global_view), fold_output_dir, f'{i}-global-view')
-                show(make_grid(local_view), fold_output_dir, f'{i}-local-view')
-            show(make_grid(train_imgs[:show_num]), fold_output_dir, f'train-imgs')
-            show(make_grid(val_imgs[:show_num]), fold_output_dir, f'val-imgs')
+                show(make_grid(global_view), fold_save_dir, f'{i}-global-view')
+                show(make_grid(local_view), fold_save_dir, f'{i}-local-view')
+            show(make_grid(train_imgs[:show_num]), fold_save_dir, f'train-imgs')
+            show(make_grid(val_imgs[:show_num]), fold_save_dir, f'val-imgs')
             del views, train_imgs, val_imgs
 
         # ============ building student and teacher networks ... ============
@@ -323,26 +329,26 @@ def train_esvit(args):
                 teacher=de_parallel(teacher),
                 optimizer=optimizer,
                 scaler=scaler,
-                criterion=criterion,
+                **criterion,
             )
             print(f'Resumed from {args.pretrained_weights_ckpt}')
 
         restart_from_checkpoint(
-            str(fold_output_dir / "last.pth"),
+            str(fold_save_dir / "last.pth"),
             run_variables=to_restore,
             student=de_parallel(student),
             teacher=de_parallel(teacher),
             optimizer=optimizer,
             scaler=scaler,
-            criterion=criterion,
+            **criterion,
         )
         start_epoch = to_restore["epoch"]
 
         start_time = time.time()
         print(f"Starting training of DINO! from epoch {start_epoch}")
+
         lowest_loss = sys.float_info.max
-        best_w = Path(fold_output_dir) / f'best.pth'
-        last_w = Path(fold_output_dir) / f'last.pth'
+        best_w, last_w = fold_save_dir / f'best.pth', fold_save_dir / f'last.pth'
         for epoch in range(start_epoch, args.epochs):
             if args.distributed:
                 data_loader.sampler.set_epoch(epoch)
@@ -378,7 +384,7 @@ def train_esvit(args):
                          'epoch': epoch}
 
             if is_main_process():
-                with (Path(fold_output_dir / "log.txt")).open("a") as f:
+                with (Path(fold_save_dir / "log.txt")).open("a") as f:
                     f.write(json.dumps(log_stats) + "\n")
 
             # features, labels = get_features(val_loader,
@@ -398,30 +404,40 @@ def train_esvit(args):
                                 pretrained_weights=best_w,
                                 checkpoint_key="teacher")
         # Run the best pt.file
-        run(train_loader=train_loader,
+        best_result = run(
+            train_loader=train_loader,
             val_loader=val_loader,
             model=de_parallel(teacher),
             args=args,
-            save_dir=fold_output_dir / f'best_linear',
-            epochs=100)
+            save_dir=fold_save_dir / f'best_linear',
+            epochs=1
+        )
 
         load_pretrained_weights(model=de_parallel(teacher),
                                 pretrained_weights=last_w,
                                 checkpoint_key="teacher")
 
         # Run the last pt.file
-        run(train_loader=train_loader,
+        last_result = run(
+            train_loader=train_loader,
             val_loader=val_loader,
             model=de_parallel(teacher),
             args=args,
-            save_dir=fold_output_dir / f'last_linear',
-            epochs=100)
+            save_dir=fold_save_dir / f'last_linear',
+            epochs=1
+        )
+
+        # save result
+        folder_result[k + 1] = {'best': best_result, 'last': last_result}
 
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
 
         torch.cuda.empty_cache()
         print('Training time {}'.format(total_time_str))
+
+    yaml_save(Path(args.save_dir) / 'folder_result.yaml', data=folder_result)
+
 
 
 @torch.no_grad()
@@ -453,7 +469,7 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
     device = next(student.parameters()).device  # get model device
 
     metric_logger = MetricLogger(delimiter=" ")
-    header = 'Epoch: {}/{}'.format(epoch, args.epochs)
+    header = 'Epoch:[{}/{}]'.format(epoch, args.epochs)
     for it, batch in enumerate(metric_logger.log_every(data_loader, 10, header)):
         # update weight decay and learning rate according to their schedule
         it = len(data_loader) * epoch + it  # global training iteration
@@ -470,7 +486,7 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
         student_input = images
 
         # teacher and student forward passes + compute dino loss
-        with torch.cuda.amp.autocast(scaler is not None):
+        with torch.cuda.amp.autocast(scaler is not None), torch.backends.cuda.sdp_kernel(enable_flash=False):
             with torch.no_grad():
                 teacher_output = teacher(teacher_input)  # only the 2 global views pass through the teacher
             student_output = student(student_input)
@@ -548,5 +564,5 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('EsViT', parents=[get_args_parser()])
     args = parser.parse_args()
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    Path(args.save_dir).mkdir(parents=True, exist_ok=True)
     train_esvit(args)

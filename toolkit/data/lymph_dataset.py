@@ -34,7 +34,6 @@ class LymphBaseDataset(Dataset, ABC):
         self.prefix = prefix
 
     def get_labels(self, img_path):
-        labels = []
         try:
             x = []
             for p in img_path if isinstance(img_path, list) else [img_path]:
