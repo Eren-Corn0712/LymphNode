@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torchvision.ops.misc import Permute
+from torchvision.models.vision_transformer import Encoder
 
 
 class LinearLayer(nn.Module):
@@ -20,47 +21,29 @@ class LinearLayer(nn.Module):
         return self.act(self.bn(self.linear(x)))
 
 
-class CAREHead(nn.Module):
+class AttnHead(nn.Module):
     def __init__(
             self,
             in_dim,
             out_dim,
-            num_heads=4,
-            dim_feedforward=2048,
+            use_bn=False,
+            norm_last_layer=True,
+            num_layers=3,
             hidden_dim=2048,
             bottleneck_dim=256,
-            norm_last_layer=True,
+            num_heads=4,
     ):
         super().__init__()
-        layers = []
-        layers += [nn.TransformerEncoderLayer(
-            d_model=in_dim,
-            nhead=num_heads,
-            dim_feedforward=dim_feedforward,
-            dropout=0.1,
-            activation=F.gelu,
-            batch_first=True)] * 2
 
-        self.encoder_layer = nn.Sequential(*layers)
-
-        layers = []
-        layers.append(Permute([0, 2, 1]))  # b, h * w, c -> b, c, h *  w
-        layers.append(nn.AdaptiveAvgPool1d(1))  # b, c, h * w -> b, c, 1
-        layers.append(nn.Flatten(1))  # b, c, 1 -> b, c
-
-        layers.append(LinearLayer(in_dim, hidden_dim))
-        layers.append(LinearLayer(hidden_dim, hidden_dim))
-        layers.append(LinearLayer(hidden_dim, bottleneck_dim))
-        self.layers = nn.Sequential(*layers)
-
-        self.last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
-        self.last_layer.weight_g.data.fill_(1)
-        if norm_last_layer:
-            self.last_layer.weight_g.requires_grad = False
+        self.encoder_layer = Encoder(seq_length=(224 // 32) ** 2,
+                                     num_layers=num_layers,
+                                     num_heads=num_heads,
+                                     hidden_dim=in_dim,
+                                     mlp_dim=out_dim,
+                                     dropout=0.1,
+                                     attention_dropout=0.1)
 
     def forward(self, x):
-        attn = self.encoder_layer(x)
-        x = self.layers(attn)
-        x = F.normalize(x, p=2, dim=-1)
-        x = self.last_layer(x)
-        return attn, x
+        # Torchvision supoort input size is b,s,c
+        x = self.encoder_layer(x)
+        return x

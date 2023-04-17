@@ -19,7 +19,6 @@ import toolkit.models.resnet as resnet
 from toolkit.models.head import LinearClassifier
 from toolkit.utils.torch_utils import de_parallel, time_sync, accuracy
 from toolkit.utils.dist_utils import save_on_master, is_main_process, get_world_size
-from copy import deepcopy
 
 
 def run(
@@ -74,14 +73,16 @@ def run(
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, epochs, eta_min=0)
 
-    if save_dir and dist.get_rank() == 0:
+    if save_dir and is_main_process():
         if not save_dir.exists():
             save_dir.mkdir(parents=True, exist_ok=True)
 
     best_acc = 0
     best_f1 = 0
-    last_w, best_w = (save_dir / "last.pth", save_dir / "best.pth")
+    best_result = None
 
+    # last, best path
+    last_w, best_w = (save_dir / "last.pth", save_dir / "best.pth")
     for epoch in range(0, epochs + 1):
 
         train_stats = train(model, linear_classifier, optimizer, train_loader, epoch, args.n_last_blocks, depths)
@@ -92,8 +93,8 @@ def run(
                      'epoch': epoch}
 
         test_stats, result = validate_network(val_loader, model, linear_classifier, args.n_last_blocks, depths)
-        print(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
 
+        print(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
         log_stats = {**{k: v for k, v in log_stats.items()},
                      **{f'test_{k}': v for k, v in test_stats.items()}}
 
@@ -107,22 +108,26 @@ def run(
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
             "best_acc": best_acc,
+            "best_f1": best_f1
         }
 
-        save_on_master(save_dict, str(last_w))
+        save_on_master(save_dict, last_w)
 
         f1 = f1_score(result['target'], result['predict'], average='weighted')
+
         if is_main_process():
             if f1 > best_f1:
                 name = ['Benign', 'Malignant']
                 best_acc, best_f1 = test_stats["acc1"], f1
                 print(f'Max accuracy so far: {best_acc:.4f}% F1-Score: {f1:.4f}')
 
-                save_on_master(save_dict, str(best_w))
+                save_on_master(save_dict, best_w)
 
-                pd.DataFrame(classification_report(
+                cls_report = classification_report(
                     result['target'], result['predict'], target_names=name, output_dict=True)
-                ).to_csv(save_dir / 'best.csv')
+
+                pd.DataFrame(cls_report).to_csv(save_dir / 'best.csv')
+                best_result = cls_report
 
                 cm = confusion_matrix(result['target'], result['predict'])
                 cm = pd.DataFrame(cm, name, name)
@@ -132,11 +137,13 @@ def run(
                 plt.xlabel("prediction")
                 plt.ylabel("label (ground truth)")
                 plt.savefig(save_dir / "best_confusion_matrix.png")
+                plt.close()
 
         del save_dict
 
     print("Training of the supervised linear classifier on frozen features completed.\n"
           "Top-1 test accuracy: {acc:.1f}".format(acc=best_acc))
+    return best_result
 
 
 def train(model, linear_classifier, optimizer, loader, epoch, n, depths):
