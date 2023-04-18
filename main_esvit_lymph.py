@@ -18,7 +18,7 @@ import toolkit.models.resnet as resnet
 from sklearn.metrics import classification_report
 from toolkit.data.lymph_dataset import KFoldLymphDataset
 
-from toolkit.utils import yaml_load, yaml_save, yaml_print, bool_flag
+from toolkit.utils import (yaml_load, yaml_save, yaml_print, bool_flag, average_classification_reports)
 from toolkit.utils.torch_utils import (init_seeds, de_parallel, has_batchnorms, cosine_scheduler,
                                        time_sync, get_params_groups, LARS, MultiCropWrapper, load_pretrained_weights,
                                        restart_from_checkpoint, clip_gradients, cancel_gradients_last_layer,
@@ -93,9 +93,9 @@ def get_args_parser():
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
         gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
         help optimization for larger ViT architectures. 0 for disabling.""")
-    parser.add_argument('--batch_size_per_gpu', default=16, type=int,
+    parser.add_argument('--batch_size_per_gpu', default=32, type=int,
                         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
-    parser.add_argument('--epochs', default=30, type=int, help='Number of epochs of training.')
+    parser.add_argument('--epochs', default=10, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
         during which we keep the output layer fixed. Typically doing so during
         the first epoch helps training. Try increasing this value if the loss does not decrease.""")
@@ -182,7 +182,7 @@ def train_esvit(args):
     yaml_save(Path(args.save_dir) / 'args.yaml', data=vars(args))
     yaml_print(Path(args.save_dir) / 'args.yaml')
 
-    folder_result = {}
+    best_results, last_results = [], []
 
     device = torch.device(args.device)
     # ============ preparing data ... ============
@@ -353,10 +353,18 @@ def train_esvit(args):
             if args.distributed:
                 data_loader.sampler.set_epoch(epoch)
             # ============ training one epoch of EsViT ... ============
-            train_stats = train_one_epoch(student=student, teacher=teacher, criterion=criterion,
-                                          data_loader=data_loader, optimizer=optimizer, lr_schedule=lr_schedule,
-                                          wd_schedule=wd_schedule, momentum_schedule=momentum_schedule, epoch=epoch,
-                                          scaler=scaler, args=args)
+            train_stats = train_one_epoch(
+                student=student,
+                teacher=teacher,
+                criterion=criterion,
+                data_loader=data_loader,
+                optimizer=optimizer, lr_schedule=lr_schedule,
+                wd_schedule=wd_schedule,
+                momentum_schedule=momentum_schedule,
+                epoch=epoch,
+                scaler=scaler,
+                args=args
+            )
 
             # ============ writing logs ... ============
             save_dict = {
@@ -400,9 +408,11 @@ def train_esvit(args):
 
         # ============ Linear evaluation ============
 
-        load_pretrained_weights(model=de_parallel(teacher),
-                                pretrained_weights=best_w,
-                                checkpoint_key="teacher")
+        load_pretrained_weights(
+            model=de_parallel(teacher),
+            pretrained_weights=best_w,
+            checkpoint_key="teacher"
+        )
         # Run the best pt.file
         best_result = run(
             train_loader=train_loader,
@@ -413,9 +423,11 @@ def train_esvit(args):
             epochs=1
         )
 
-        load_pretrained_weights(model=de_parallel(teacher),
-                                pretrained_weights=last_w,
-                                checkpoint_key="teacher")
+        load_pretrained_weights(
+            model=de_parallel(teacher),
+            pretrained_weights=last_w,
+            checkpoint_key="teacher"
+        )
 
         # Run the last pt.file
         last_result = run(
@@ -428,17 +440,18 @@ def train_esvit(args):
         )
 
         # save result
-        folder_result[k + 1] = {'best': best_result, 'last': last_result}
+        best_results.append(best_result)
+        last_results.append(last_result)
 
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
 
-        torch.cuda.empty_cache()
         print('Training time {}'.format(total_time_str))
 
-    yaml_save(Path(args.save_dir) / 'folder_result.yaml', data=folder_result)
-
-
+    best_average = average_classification_reports(best_results)
+    last_average = average_classification_reports(last_results)
+    yaml_save(Path(args.save_dir) / 'best_average.yaml', data=best_average)
+    yaml_save(Path(args.save_dir) / 'last_average.yaml', data=last_average)
 
 @torch.no_grad()
 def get_features(val_loader, model, n, avgpool, depths):

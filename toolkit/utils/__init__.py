@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Union
+from collections import defaultdict
 
 import cv2
 import numpy as np
@@ -185,3 +186,33 @@ def bool_flag(s):
         return True
     else:
         raise argparse.ArgumentTypeError("invalid value for a boolean flag")
+
+
+def average_classification_reports(reports):
+    # 初始化一個字典來儲存平均值
+    averages = {}
+
+    # 計算每個標籤的 metric 值總和
+    for report in reports:
+        for label, metrics in report.items():
+            # init dict
+            if label not in averages and isinstance(metrics, dict):
+                averages[label] = {metric: 0 for metric in metrics}
+            elif label not in averages and isinstance(metrics, float):
+                averages[label] = 0
+
+            if isinstance(metrics, dict):
+                for metric, value in metrics.items():
+                    averages[label][metric] += value
+            elif isinstance(metrics, float):
+                averages[label] += metrics
+
+    # 計算平均值
+    num_reports = len(reports)
+    for label, metrics in averages.items():
+        if isinstance(metrics, dict):
+            for metric, value in metrics.items():
+                averages[label][metric] = value / num_reports
+        elif isinstance(metrics, float):
+            averages[label] /= num_reports
+    return averages
