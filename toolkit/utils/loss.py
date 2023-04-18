@@ -45,7 +45,7 @@ class DINOLoss(nn.Module):
         teacher_out = F.softmax((teacher_output - self.center) / temp, dim=-1)
         teacher_out = teacher_out.detach().chunk(2)
 
-        total_loss = 0
+        total_loss = torch.zeros(1, device=teacher_out[0].device)
         n_loss_terms = 0
         for iq, q in enumerate(teacher_out):
             for v in range(len(student_out)):
@@ -62,7 +62,10 @@ class DINOLoss(nn.Module):
         total_loss /= n_loss_terms
         self.update_center(teacher_output)
 
-        return total_loss
+        return (
+            total_loss.sum(),
+            {"global_loss": total_loss.item()}
+        )
 
     @torch.inference_mode()
     def update_center(self, teacher_output):

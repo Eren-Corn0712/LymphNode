@@ -67,7 +67,7 @@ def get_args_parser():
     parser.add_argument('--use_bn_in_head', default=False, type=bool_flag,
                         help="Whether to use batch normalizations in projection head (Default: False)")
 
-    parser.add_argument('--use_dense_prediction', default=True, type=bool_flag,
+    parser.add_argument('--use_dense_prediction', default=False, type=bool_flag,
                         help="Whether to use dense prediction in projection head (Default: False)")
 
     # Temperature teacher parameters
@@ -168,6 +168,9 @@ def get_args_parser():
     parser.add_argument('--val_freq', default=1, type=int, help="Epoch frequency for validation.")
     parser.add_argument('--device', default="cuda")
 
+    # Linear Parser
+    parser.add_argument('--linear_lr', type=float, default=0.001)
+    parser.add_argument('--linear_epochs', type=int, default=1)
     # additional loss
     parser.add_argument('--use_attention_head', default=True, type=bool_flag)
 
@@ -419,8 +422,9 @@ def train_esvit(args):
             val_loader=val_loader,
             model=de_parallel(teacher),
             args=args,
-            save_dir=fold_save_dir / f'best_linear',
-            epochs=1
+            save_dir=fold_save_dir / f'best_linear_eval',
+            epochs=args.linear_epochs,
+            lr=args.linear_lr
         )
 
         load_pretrained_weights(
@@ -435,8 +439,9 @@ def train_esvit(args):
             val_loader=val_loader,
             model=de_parallel(teacher),
             args=args,
-            save_dir=fold_save_dir / f'last_linear',
-            epochs=1
+            save_dir=fold_save_dir / f'last_linear_eval',
+            epochs=args.linear_epochs,
+            lr=args.linear_lr
         )
 
         # save result
@@ -452,6 +457,9 @@ def train_esvit(args):
     last_average = average_classification_reports(last_results)
     yaml_save(Path(args.save_dir) / 'best_average.yaml', data=best_average)
     yaml_save(Path(args.save_dir) / 'last_average.yaml', data=last_average)
+
+    torch.cuda.empty_cache()
+
 
 @torch.no_grad()
 def get_features(val_loader, model, n, avgpool, depths):
@@ -517,6 +525,16 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
                         t_fea=teacher_output["output_fea"],
                         t_npatch=teacher_output["num_patch"],
                         epoch=epoch
+                    )
+                    total_loss += loss
+                    total_items = {**total_items, **loss_items}
+
+                if loss_key == "dino_loss":
+                    loss, loss_items = loss_fun(
+                        student_output=student_output['head'],
+                        teacher_output=teacher_output['head'],
+                        epoch=epoch,
+                        targets_mixup=None,
                     )
                     total_loss += loss
                     total_items = {**total_items, **loss_items}
