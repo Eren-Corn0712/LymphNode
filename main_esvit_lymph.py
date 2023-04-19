@@ -18,7 +18,7 @@ import toolkit.models.resnet as resnet
 from sklearn.metrics import classification_report
 from toolkit.data.lymph_dataset import KFoldLymphDataset
 
-from toolkit.utils import (yaml_load, yaml_save, yaml_print, bool_flag, average_classification_reports)
+from toolkit.utils import (yaml_load, yaml_save, yaml_print, bool_flag, average_classification_reports, print_options)
 from toolkit.utils.torch_utils import (init_seeds, de_parallel, has_batchnorms, cosine_scheduler,
                                        time_sync, get_params_groups, LARS, MultiCropWrapper, load_pretrained_weights,
                                        restart_from_checkpoint, clip_gradients, cancel_gradients_last_layer,
@@ -130,14 +130,9 @@ def get_args_parser():
                              "(default: dino_aug)')
     parser.add_argument('--color-jitter', type=float, default=0.4, metavar='PCT',
                         help='Color jitter factor (default: 0.4)')
-    parser.add_argument('--aa', type=str, default='rand-m9-mstd0.5-inc1', metavar='NAME',
-                        help='Use AutoAugment policy. "v0" or "original". " + \
-                             "(default: rand-m9-mstd0.5-inc1)'),
+
     parser.add_argument('--train-interpolation', type=str, default='bicubic',
                         help='Training interpolation (random, bilinear, bicubic default: "bicubic")')
-
-    # Dataset
-    parser.add_argument('--dataset', default="imagenet1k", type=str, help='Pre-training dataset.')
 
     parser.add_argument('--sampler', default="distributed", type=str, help='Sampler for dataloader.')
 
@@ -159,11 +154,8 @@ def get_args_parser():
                         default=None,
                         nargs=argparse.REMAINDER)
 
-    parser.add_argument('--n_last_blocks', default=4, type=int, help="""Concatenate [CLS] tokens
+    parser.add_argument('--n_last_blocks', default=2, type=int, help="""Concatenate [CLS] tokens
         for the `n` last blocks. We use `n=4` when evaluating DeiT-Small and `n=1` with ViT-Base.""")
-    parser.add_argument('--avgpool_patchtokens', default=False, type=bool_flag,
-                        help="""Whether ot not to concatenate the global average pooled features to the [CLS] token.
-        We typically set this to False for DeiT-Small and to True with ViT-Base.""")
     parser.add_argument('--num_labels', default=2, type=int, help='number of classes in a dataset')
     parser.add_argument('--val_freq', default=1, type=int, help="Epoch frequency for validation.")
     parser.add_argument('--device', default="cuda")
@@ -183,7 +175,7 @@ def train_esvit(args):
     init_seeds(args.seed)
 
     yaml_save(Path(args.save_dir) / 'args.yaml', data=vars(args))
-    yaml_print(Path(args.save_dir) / 'args.yaml')
+    print_options(args)
 
     best_results, last_results = [], []
 
@@ -204,21 +196,21 @@ def train_esvit(args):
 
         data_loader, train_loader, val_loader = build_dataloader(args, backbone_dataset, train_set, test_set)
 
-        if is_main_process():
-            # May be have bug....
-            views = next(iter(data_loader))['img']
-            train_imgs = next(iter(train_loader))['img']
-            val_imgs = next(iter(val_loader))['img']
-
-            show_num = min(4, args.batch_size_per_gpu)
-            for i in range(show_num):
-                global_view = [view[i] for view in views[:2]]
-                local_view = [view[i] for view in views[2:]]
-                show(make_grid(global_view), fold_save_dir, f'{i}-global-view')
-                show(make_grid(local_view), fold_save_dir, f'{i}-local-view')
-            show(make_grid(train_imgs[:show_num]), fold_save_dir, f'train-imgs')
-            show(make_grid(val_imgs[:show_num]), fold_save_dir, f'val-imgs')
-            del views, train_imgs, val_imgs
+        # if is_main_process():
+        #     # May be have bug....
+        #     views = next(iter(data_loader))['img']
+        #     train_imgs = next(iter(train_loader))['img']
+        #     val_imgs = next(iter(val_loader))['img']
+        #
+        #     show_num = min(2, args.batch_size_per_gpu)
+        #     for i in range(show_num):
+        #         global_view = [view[i] for view in views[:2]]
+        #         local_view = [view[i] for view in views[2:]]
+        #         show(make_grid(global_view), fold_save_dir, f'{i}-global-view')
+        #         show(make_grid(local_view), fold_save_dir, f'{i}-local-view')
+        #     show(make_grid(train_imgs[:show_num]), fold_save_dir, f'train-imgs')
+        #     show(make_grid(val_imgs[:show_num]), fold_save_dir, f'val-imgs')
+        #     del views, train_imgs, val_imgs
 
         # ============ building student and teacher networks ... ============
 
@@ -559,7 +551,7 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
             }
             if scaler is not None:
                 save_dict['scaler'] = scaler.state_dict()
-            save_on_master(save_dict, args.output_dir / 'checkpoint_nan.pth')
+            save_on_master(save_dict, args.save_dir / 'checkpoint_nan.pth')
             del save_dict
             torch.cuda.empty_cache()
             sys.exit(1)

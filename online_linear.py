@@ -51,7 +51,6 @@ def run(
             num_features += [int(embed_dim * 2 ** i)] * d
 
         print(num_features)
-        args.n_last_blocks = 1
         num_features_linear = sum(num_features[-args.n_last_blocks:])
         print(f'num_features_linear {num_features_linear}')
         linear_classifier = LinearClassifier(num_features_linear, args.num_labels)

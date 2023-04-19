@@ -333,8 +333,8 @@ def load_pretrained_weights(model, pretrained_weights, checkpoint_key, model_nam
         if checkpoint_key is not None and checkpoint_key in state_dict:
             print(f"Take key {checkpoint_key} in provided checkpoint dict")
             state_dict = state_dict[checkpoint_key]
-        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-        msg = model.load_state_dict(state_dict, strict=False)
+        state_dict = {k: v for k, v in state_dict.items()}
+        msg = model.load_state_dict(state_dict, strict=True)
         LOGGER.info(colorstr('Pretrained weights found at {} and loaded with msg: {}'.format(pretrained_weights, msg)))
     else:
         print("Please use the `--pretrained_weights` argument to indicate the path of the checkpoint to evaluate.")

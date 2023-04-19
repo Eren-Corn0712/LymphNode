@@ -188,6 +188,16 @@ def bool_flag(s):
         raise argparse.ArgumentTypeError("invalid value for a boolean flag")
 
 
+def print_options(opt):
+    message = ''
+    message += '----------------- Options ---------------\n'
+    for k, v in sorted(vars(opt).items()):
+        comment = ''
+        message += '{:>25}: {:<30}{}\n'.format(str(k), str(v), comment)
+    message += '----------------- End -------------------'
+    print(message)
+
+
 def average_classification_reports(reports):
     # 初始化一個字典來儲存平均值
     averages = {}
