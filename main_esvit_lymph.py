@@ -173,15 +173,15 @@ def train_esvit(args):
     # Setting the distributed model
     init_distributed_mode(args)
     init_seeds(args.seed)
-
-    yaml_save(Path(args.save_dir) / 'args.yaml', data=vars(args))
-    print_options(args)
+    if is_main_process():
+        yaml_save(Path(args.save_dir) / 'args.yaml', data=vars(args))
+        print_options(args)
 
     best_results, last_results = [], []
 
     device = torch.device(args.device)
     # ============ preparing data ... ============
-    k_fold_dataset = KFoldLymphDataset(args.data_path)
+    k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=3, shuffle=True, random_state=args.seed)
     for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
         # Create folder output file
         fold_save_dir = Path(args.save_dir) / f'{k + 1}-fold'
@@ -445,10 +445,11 @@ def train_esvit(args):
 
         print('Training time {}'.format(total_time_str))
 
-    best_average = average_classification_reports(best_results)
-    last_average = average_classification_reports(last_results)
-    yaml_save(Path(args.save_dir) / 'best_average.yaml', data=best_average)
-    yaml_save(Path(args.save_dir) / 'last_average.yaml', data=last_average)
+    if is_main_process():
+        best_average = average_classification_reports(best_results)
+        last_average = average_classification_reports(last_results)
+        yaml_save(Path(args.save_dir) / 'best_average.yaml', data=best_average)
+        yaml_save(Path(args.save_dir) / 'last_average.yaml', data=last_average)
 
     torch.cuda.empty_cache()
 

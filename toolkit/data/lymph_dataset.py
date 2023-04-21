@@ -68,14 +68,15 @@ class LymphBaseDataset(Dataset, ABC):
 
 
 class KFoldLymphDataset(LymphBaseDataset):
-    def __init__(self, root, transform=None, n_splits=3, shuffle=False, random_state=None):
+    def __init__(self, root, transform=None, n_splits=3, shuffle=True, random_state=None):
         super().__init__(root)
         self.stratified_k_fold = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
         self.transform = transform
 
     def generate_fold_dataset(self):
         labels = np.array([list(l.values()) for l in self.labels])
-        for train_idx, test_idx in self.stratified_k_fold.split(labels[:, 0], labels[:, 1]):
+        for train_idx, test_idx in self.stratified_k_fold.split(
+                labels[:, 0], labels[:, 1]):
             train_labels = list(np.array(self.labels)[train_idx])
             test_labels = list(np.array(self.labels)[test_idx])
             yield WrapperFoldDataset(train_labels), WrapperFoldDataset(test_labels)

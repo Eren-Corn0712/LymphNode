@@ -207,7 +207,7 @@ def validate_network(val_loader, model, linear_classifier, n, depths):
         output = linear_classifier(output)
         loss = nn.CrossEntropyLoss()(output, target)
 
-        acc1, _ = toolkit.utils.torch_utils.accuracy(output, target, topk=(1, 2))
+        acc1, _ = accuracy(output, target, topk=(1, 2))
 
         _, predict = torch.max(output.data, 1)
 
