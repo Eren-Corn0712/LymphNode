@@ -17,7 +17,7 @@ from sklearn.metrics import classification_report, confusion_matrix, f1_score
 import toolkit.models.swin_transformer as swin_transformer
 import toolkit.models.resnet as resnet
 from toolkit.models.head import LinearClassifier
-from toolkit.utils.torch_utils import de_parallel, time_sync, accuracy
+from toolkit.utils.torch_utils import de_parallel, time_sync, accuracy, detach_to_cpu_numpy
 from toolkit.utils.dist_utils import save_on_master, is_main_process, get_world_size
 
 
@@ -91,7 +91,7 @@ def run(
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      'epoch': epoch}
 
-        test_stats, result = validate_network(val_loader, model, linear_classifier, args.n_last_blocks, depths)
+        test_stats = validate_network(val_loader, model, linear_classifier, args.n_last_blocks, depths)
 
         print(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
         log_stats = {**{k: v for k, v in log_stats.items()},
@@ -112,7 +112,7 @@ def run(
 
         save_on_master(save_dict, last_w)
 
-        f1 = f1_score(result['target'], result['predict'], average='weighted')
+        f1 = f1_score(test_stats['targets'], test_stats['predicts'], average='weighted')
 
         if is_main_process():
             if f1 > best_f1:
@@ -123,12 +123,16 @@ def run(
                 save_on_master(save_dict, best_w)
 
                 cls_report = classification_report(
-                    result['target'], result['predict'], target_names=name, output_dict=True)
+                    test_stats['target'],
+                    test_stats['predict'],
+                    target_names=name, output_dict=True)
 
                 pd.DataFrame(cls_report).to_csv(save_dir / 'best.csv')
                 best_result = cls_report
 
-                cm = confusion_matrix(result['target'], result['predict'])
+                cm = confusion_matrix(test_stats['target'],
+                                      test_stats['predict'])
+
                 cm = pd.DataFrame(cm, name, name)
 
                 plt.figure(figsize=(9, 6))
@@ -188,7 +192,7 @@ def train(model, linear_classifier, optimizer, loader, epoch, n, depths):
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def validate_network(val_loader, model, linear_classifier, n, depths):
     linear_classifier.eval()
     model.eval()
@@ -196,7 +200,7 @@ def validate_network(val_loader, model, linear_classifier, n, depths):
 
     metric_logger = toolkit.utils.logger.MetricLogger(delimiter="  ")
     header = 'Test:'
-    result = {'target': [], 'predict': []}
+    targets, predicts = [], []
     for batch in metric_logger.log_every(val_loader, 20, header):
         # move to gpu
         inp = batch['img'].to(device, non_blocking=True)
@@ -211,12 +215,16 @@ def validate_network(val_loader, model, linear_classifier, n, depths):
 
         _, predict = torch.max(output.data, 1)
 
-        result['target'].extend(target.view(-1).detach().cpu().numpy())
-        result['predict'].extend(predict.view(-1).detach().cpu().numpy())
+        targets.extend(detach_to_cpu_numpy(target))
+        predicts.extend(detach_to_cpu_numpy(predict))
 
         batch_size = inp.shape[0]
         metric_logger.update(loss=loss.item())
         metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
     print('* Acc@1 {top1.global_avg:.3f} loss {losses.global_avg:.3f}'
           .format(top1=metric_logger.acc1, losses=metric_logger.loss))
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, result
+
+    states = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    states["targets"] = targets
+    states["predicts"] = predicts
+    return states

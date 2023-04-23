@@ -14,6 +14,7 @@ from torchvision.datasets.folder import find_classes
 from sklearn.model_selection import StratifiedKFold
 from toolkit.data.utils import IMG_FORMATS
 from toolkit.utils.files import find_files
+from toolkit.utils.torch_utils import copy_attr
 from PIL import Image
 
 
@@ -30,7 +31,10 @@ class LymphBaseDataset(Dataset, ABC):
                  prefix="",
                  ):
         self.root = root
+        self.class_to_idx = None
+        self.classes = None
         self.labels = self.get_labels(img_path=self.root)
+
         self.prefix = prefix
 
     def get_labels(self, img_path):
@@ -40,10 +44,18 @@ class LymphBaseDataset(Dataset, ABC):
                 p = Path(p)
                 # Benign or Malignant
                 classes, class_to_idx = self.find_classes(str(p))
+                if self.class_to_idx is None:
+                    self.classes = classes
+                    self.class_to_idx = class_to_idx
+                else:
+                    if class_to_idx != self.class_to_idx and classes != self.classes:
+                        raise ValueError(f"Two folder exists different class!.")
+
                 for cls in classes:
                     # Find Patient id
                     patient_ids, _ = self.find_classes(str(p / cls))
                     for patient_id in patient_ids:
+                        # Search Patient ID
                         search_p = p / cls / patient_id
                         if search_p.is_dir():
                             files = glob.glob(str(search_p / '**' / '*.*'), recursive=True)
@@ -79,7 +91,12 @@ class KFoldLymphDataset(LymphBaseDataset):
                 labels[:, 0], labels[:, 1]):
             train_labels = list(np.array(self.labels)[train_idx])
             test_labels = list(np.array(self.labels)[test_idx])
-            yield WrapperFoldDataset(train_labels), WrapperFoldDataset(test_labels)
+            train_dataset, test_dataset = WrapperFoldDataset(train_labels), WrapperFoldDataset(test_labels)
+
+            copy_attr(train_dataset, self, include=("class_to_idx", "classes"))
+            copy_attr(test_dataset, self, include=("class_to_idx", "classes"))
+
+            yield train_dataset, test_dataset
 
     def __len__(self):
         return len(self.labels)

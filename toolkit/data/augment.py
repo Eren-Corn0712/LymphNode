@@ -1,13 +1,12 @@
 import random
 import math
-from typing import Tuple
-
-import torchvision.transforms as transforms
-from PIL import ImageFilter, ImageOps, Image
-
 import torch
-from torch import Tensor
+from torch import Tensor  # typing
 from torchvision.transforms import functional as F
+from torchvision.transforms import autoaugment, transforms
+from torchvision.transforms.functional import InterpolationMode
+from typing import Tuple
+from PIL import ImageFilter, ImageOps, Image
 
 
 class ResizePadding(object):
@@ -388,7 +387,77 @@ class RandomCutmix(torch.nn.Module):
         return s
 
 
-def get_transform(args, name):
+class ClassificationPresetTrain:
+    def __init__(
+            self,
+            *,
+            crop_size,
+            mean=(0.485, 0.456, 0.406),
+            std=(0.229, 0.224, 0.225),
+            interpolation=InterpolationMode.BILINEAR,
+            hflip_prob=0.5,
+            auto_augment_policy=None,
+            ra_magnitude=9,
+            augmix_severity=3,
+            random_erase_prob=0.0,
+    ):
+        trans = [transforms.RandomResizedCrop(crop_size, interpolation=interpolation)]
+        if hflip_prob > 0:
+            trans.append(transforms.RandomHorizontalFlip(hflip_prob))
+        if auto_augment_policy is not None:
+            if auto_augment_policy == "ra":
+                trans.append(autoaugment.RandAugment(interpolation=interpolation, magnitude=ra_magnitude))
+            elif auto_augment_policy == "ta_wide":
+                trans.append(autoaugment.TrivialAugmentWide(interpolation=interpolation))
+            elif auto_augment_policy == "augmix":
+                trans.append(autoaugment.AugMix(interpolation=interpolation, severity=augmix_severity))
+            else:
+                aa_policy = autoaugment.AutoAugmentPolicy(auto_augment_policy)
+                trans.append(autoaugment.AutoAugment(policy=aa_policy, interpolation=interpolation))
+        trans.extend(
+            [
+                transforms.Grayscale(num_output_channels=3),
+                transforms.PILToTensor(),
+                transforms.ConvertImageDtype(torch.float),
+                # transforms.Normalize(mean=mean, std=std), The tumor dataset does not use normalize.
+            ]
+        )
+        if random_erase_prob > 0:
+            trans.append(transforms.RandomErasing(p=random_erase_prob))
+
+        self.transforms = transforms.Compose(trans)
+
+    def __call__(self, img):
+        return self.transforms(img)
+
+
+class ClassificationPresetEval:
+    def __init__(
+            self,
+            *,
+            crop_size,
+            resize_size=256,
+            mean=(0.485, 0.456, 0.406),
+            std=(0.229, 0.224, 0.225),
+            interpolation=InterpolationMode.BILINEAR,
+    ):
+        self.transforms = transforms.Compose(
+            [
+                transforms.Resize((resize_size, resize_size),
+                                  interpolation=interpolation),
+                # transforms.CenterCrop(crop_size),
+                transforms.Grayscale(num_output_channels=3),
+                transforms.PILToTensor(),
+                transforms.ConvertImageDtype(torch.float),
+                # transforms.Normalize(mean=mean, std=std), The tumor dataset does not use normalize.
+            ]
+        )
+
+    def __call__(self, img):
+        return self.transforms(img)
+
+
+def create_transform(args, name):
     if name == "lymph_node_aug":
         transform = DataAugmentationLymphNode(
             args.global_crops_scale,
@@ -417,6 +486,26 @@ def get_transform(args, name):
             transforms.Grayscale(num_output_channels=3),
             transforms.ToTensor(),
         ])
+
+    elif name == "preset_train":
+        auto_augment_policy = getattr(args, "auto_augment", None)
+        random_erase_prob = getattr(args, "random_erase", 0.0)
+        ra_magnitude = getattr(args, "ra_magnitude", None)
+        augmix_severity = getattr(args, "augmix_severity", None)
+        transform = ClassificationPresetTrain(
+            crop_size=args.train_crop_size,
+            interpolation=InterpolationMode(args.interpolation),
+            auto_augment_policy=auto_augment_policy,
+            random_erase_prob=random_erase_prob,
+            ra_magnitude=ra_magnitude,
+            augmix_severity=augmix_severity,
+        )
+    elif name == "preset_test":
+        transform = ClassificationPresetEval(
+            crop_size=args.val_crop_size,
+            resize_size=args.val_resize_size,
+            interpolation=InterpolationMode(args.interpolation)
+        )
     else:
         raise ValueError(f"Not support for {name}")
 

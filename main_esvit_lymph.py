@@ -34,7 +34,7 @@ from toolkit.models.head import DINOHead
 from toolkit.models.care import AttnHead
 
 from toolkit.data.bulid_dataloader import build_dataloader
-from toolkit.data.augment import get_transform
+from toolkit.data.augment import create_transform
 from torchvision.utils import make_grid
 
 from online_linear import run
@@ -190,9 +190,9 @@ def train_esvit(args):
         # transformation for backbone, train linear, test linear
         backbone_dataset = deepcopy(train_set)
 
-        backbone_dataset.transform = get_transform(args, args.aug_opt)
-        train_set.transform = get_transform(args, "eval_train")
-        test_set.transform = get_transform(args, "eval_test")
+        backbone_dataset.transform = create_transform(args, args.aug_opt)
+        train_set.transform = create_transform(args, "eval_train")
+        test_set.transform = create_transform(args, "eval_test")
 
         data_loader, train_loader, val_loader = build_dataloader(args, backbone_dataset, train_set, test_set)
 
