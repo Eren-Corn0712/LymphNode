@@ -87,7 +87,7 @@ def run(
         train_stats = train(model, linear_classifier, optimizer, train_loader, epoch, args.n_last_blocks, depths)
 
         scheduler.step()
-
+        # TODO: Use new dict function to add prefix and merge two dict.
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      'epoch': epoch}
 
@@ -115,6 +115,7 @@ def run(
         f1 = f1_score(test_stats['targets'], test_stats['predicts'], average='weighted')
 
         if is_main_process():
+            # TODO: Name can replace to the dataset.classes
             if f1 > best_f1:
                 name = ['Benign', 'Malignant']
                 best_acc, best_f1 = test_stats["acc1"], f1
