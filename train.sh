@@ -1,14 +1,14 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0
 
 # shellcheck disable=SC2054
 MODELS=resnet18
 DIM=4096
 
-python -m torch.distributed.run --nproc_per_node=2 --master_port 25671 main_esvit_lymph.py \
+python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvit_lymph.py \
   --arch $MODELS \
   --data_path dataset leaf_tumor_video \
-  --save_dir runs/2023-04-19-w-dense-w-attn/$MODELS/$DIM \
+  --save_dir runs/2023-04-24-w-dense-w-attn/$MODELS/$DIM \
   --batch_size_per_gpu 256 \
   --momentum_teacher 0.9995 \
   --use_bn_in_head True \
@@ -32,10 +32,10 @@ python -m torch.distributed.run --nproc_per_node=2 --master_port 25671 main_esvi
   --linear_epochs 150 \
   --linear_lr 0.001
 
-python -m torch.distributed.run --nproc_per_node=2 --master_port 25671 main_esvit_lymph.py \
+python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvit_lymph.py \
   --arch $MODELS \
   --data_path dataset leaf_tumor_video \
-  --save_dir runs/2023-04-19-w-dense-wo-attn/$MODELS/$DIM \
+  --save_dir runs/2023-04-24-w-dense-wo-attn/$MODELS/$DIM \
   --batch_size_per_gpu 256 \
   --momentum_teacher 0.9995 \
   --use_bn_in_head True \
@@ -59,10 +59,10 @@ python -m torch.distributed.run --nproc_per_node=2 --master_port 25671 main_esvi
   --linear_epochs 150 \
   --linear_lr 0.001
 
-python -m torch.distributed.run --nproc_per_node=2 --master_port 25671 main_esvit_lymph.py \
+python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvit_lymph.py \
   --arch $MODELS \
   --data_path dataset leaf_tumor_video \
-  --save_dir runs/2023-04-19-wo-dense-w-attn/$MODELS/$DIM \
+  --save_dir runs/2023-04-24-wo-dense-w-attn/$MODELS/$DIM \
   --batch_size_per_gpu 256 \
   --momentum_teacher 0.9995 \
   --use_bn_in_head True \
@@ -86,10 +86,10 @@ python -m torch.distributed.run --nproc_per_node=2 --master_port 25671 main_esvi
   --linear_epochs 150 \
   --linear_lr 0.001
 
-python -m torch.distributed.run --nproc_per_node=2 --master_port 25671 main_esvit_lymph.py \
+python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvit_lymph.py \
   --arch $MODELS \
   --data_path dataset leaf_tumor_video \
-  --save_dir runs/2023-04-19-wo-dense-wo-attn/$MODELS/$DIM \
+  --save_dir runs/2023-04-24-wo-dense-wo-attn/$MODELS/$DIM \
   --batch_size_per_gpu 256 \
   --momentum_teacher 0.9995 \
   --use_bn_in_head True \

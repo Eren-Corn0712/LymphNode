@@ -90,7 +90,10 @@ class ResnetWrapper(ResNet):
         all_depths = sum(depths)
         block_idx = all_depths - n
         # stage 1 forward
-        x = self.maxpool(self.relu(self.bn1(self.conv1(x))))
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
 
         # layer1 to 4 decomposition
         layers = [getattr(self, f"layer{i}") for i in range(1, 5)]

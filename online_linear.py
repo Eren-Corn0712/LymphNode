@@ -88,14 +88,15 @@ def run(
         train_stats = train(model, linear_classifier, optimizer, train_loader, epoch, args.n_last_blocks, depths)
 
         scheduler.step()
-        # TODO: Use new dict function to add prefix and merge two dict.
+
         log_stats = merge_dict_with_prefix({}, train_stats, "train_")
 
         test_stats = validate_network(val_loader, model, linear_classifier, args.n_last_blocks, depths)
 
-        print(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
         exclude = ("targets", "predicts")
         log_stats = merge_dict_with_prefix(log_stats, test_stats, "test_", exclude=exclude)
+
+        print(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
 
         if is_main_process():
             with (Path(save_dir) / "log.txt").open("a") as f:

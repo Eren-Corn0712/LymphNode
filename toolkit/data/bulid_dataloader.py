@@ -36,7 +36,6 @@ def build_dataloader(args, backbone_dataset, train_dataset, test_dataset):
         drop_last=True,
     )
 
-    # sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = DataLoader(
         train_dataset,
         sampler=weight_sampler(train_dataset),

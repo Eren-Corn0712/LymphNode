@@ -328,7 +328,7 @@ class ResNetWrapper(nn.Module):
         return x
 
 
-def load_pretrained_weights(model, pretrained_weights, checkpoint_key, model_name=None, patch_size=None):
+def load_pretrained_weights(model, pretrained_weights, checkpoint_key):
     if os.path.isfile(pretrained_weights):
         state_dict = torch.load(pretrained_weights, map_location="cpu")
         if checkpoint_key is not None and checkpoint_key in state_dict:
@@ -541,3 +541,18 @@ def build_optimizer(optimizer: str, model: nn.Module) -> torch.optim.Optimizer:
 
 def detach_to_cpu_numpy(tensor):
     return tensor.view(-1).detach().cpu().numpy()
+
+
+def get_model_device(model: nn.Module) -> torch.device:
+    """
+    Given an nn.Module instance, returns the device where the model parameters
+    are stored.
+
+    Args:
+        model: An nn.Module instance.
+
+    Returns:
+        A torch.device instance representing the device where the model parameters
+        are stored.
+    """
+    return next(model.parameters()).device
