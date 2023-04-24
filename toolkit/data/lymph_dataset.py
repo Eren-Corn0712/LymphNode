@@ -87,17 +87,44 @@ class KFoldLymphDataset(LymphBaseDataset):
 
     def generate_fold_dataset(self):
         labels = np.array([list(l.values()) for l in self.labels])
-        for train_idx, test_idx in self.stratified_k_fold.split(
-                labels[:, 0], labels[:, 1]):
-            train_labels = list(np.array(self.labels)[train_idx])
-            test_labels = list(np.array(self.labels)[test_idx])
-            train_dataset, test_dataset = WrapperFoldDataset(train_labels), WrapperFoldDataset(test_labels)
+        X, X_dx = np.unique(labels[:, 2], return_index=True)  # ID
+        y = labels[X_dx, 1]  # Label value
+        for train_idx, test_idx in self.stratified_k_fold.split(X=X, y=y):
+            train_key_label, train_key_id = y[train_idx], X[train_idx]
+            test_key_label, test_key_id = y[test_idx], X[test_idx]
 
+            train_labels = []
+            for label, id in zip(train_key_label, train_key_id):
+                train_labels += self.search_labels(int(label), id)
+
+            test_labels = []
+            for label, id in zip(test_key_label, test_key_id):
+                test_labels += self.search_labels(int(label), id)
+
+            self.check_dataset(train_labels, test_labels, 'patient_id')
+            train_dataset, test_dataset = WrapperFoldDataset(train_labels), WrapperFoldDataset(test_labels)
             copy_attr(train_dataset, self, include=("class_to_idx", "classes"))
             copy_attr(test_dataset, self, include=("class_to_idx", "classes"))
 
             yield train_dataset, test_dataset
 
+    def search_labels(self, label, id):
+        x = []
+        for l in self.labels:
+            if l['label'] == label and l['patient_id'] == id:
+                x.append(l)
+        return x
+
+    def check_dataset(self, train, test, key_name='patient_id'):
+        train_check = set([t[key_name] for t in train])
+        test_check = set([t[key_name] for t in test])
+        merged_set = train_check.union(test_check)
+
+        if len(merged_set) == len(train_check) + len(test_check):
+            print("No duplicates found.")
+        else:
+            print("Duplicates found.")
+            raise ValueError(f"Key {key_name} Duplicates found.")
     def __len__(self):
         return len(self.labels)
 
