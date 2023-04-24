@@ -12,11 +12,10 @@ import torch
 import torch.nn as nn
 import torch.backends.cudnn
 
-from einops import rearrange, repeat
+from einops import rearrange
 from toolkit.utils.checks import check_version
 from toolkit.utils import LOGGER, colorstr
 from copy import deepcopy
-from pathlib import Path
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
@@ -26,57 +25,6 @@ TORCH_1_9 = check_version(torch.__version__, '1.9.0')
 TORCH_1_11 = check_version(torch.__version__, '1.11.0')
 TORCH_1_12 = check_version(torch.__version__, '1.12.0')
 TORCH_2_X = check_version(torch.__version__, minimum='2.0')
-
-
-def copy_attr(a, b, include=(), exclude=()):
-    # Copy attributes from b to a, options to only include [...] and to exclude [...]
-    for k, v in b.__dict__.items():
-        if (len(include) and k not in include) or k.startswith('_') or k in exclude:
-            continue
-        else:
-            setattr(a, k, v)
-
-
-def copy_attr_dict(a_dict, b_dict, include=(), exclude=()):
-    """
-    Copy key-value pairs from b_dict to a_dict, with options to only include certain keys and exclude others.
-
-    Args:
-        a_dict (dict): The dictionary to be updated.
-        b_dict (dict): The dictionary to copy from.
-        include (tuple, optional): Tuple of keys to include. Defaults to ().
-        exclude (tuple, optional): Tuple of keys to exclude. Defaults to ().
-
-    Returns:
-        dict: The updated dictionary.
-
-    """
-    for k, v in b_dict.items():
-        if (len(include) and k not in include) or k.startswith('_') or k in exclude:
-            continue
-        else:
-            a_dict[k] = v
-    return a_dict
-
-
-def prefix_dict_keys(input_dict, prefix, include=(), exclude=()):
-    """
-    Add a prefix to selected keys in the dictionary.
-
-    Args:
-        input_dict (dict): The input dictionary.
-        prefix (str): The prefix to add.
-        include (tuple, optional): Tuple of keys to include. Defaults to ().
-        exclude (tuple, optional): Tuple of keys to exclude. Defaults to ().
-
-    Returns:
-        dict: The updated dictionary.
-
-    """
-    if not include:
-        include = input_dict.keys()
-
-    return {f'{prefix}{k}': v for k, v in input_dict.items() if k in include and k not in exclude}
 
 
 class LARS(torch.optim.Optimizer):

@@ -14,7 +14,7 @@ from torchvision.datasets.folder import find_classes
 from sklearn.model_selection import StratifiedKFold
 from toolkit.data.utils import IMG_FORMATS
 from toolkit.utils.files import find_files
-from toolkit.utils.torch_utils import copy_attr
+from toolkit.utils.python_utils import copy_attr
 from PIL import Image
 
 

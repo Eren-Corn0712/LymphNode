@@ -26,7 +26,7 @@ from toolkit.utils.torch_utils import (init_seeds, de_parallel, has_batchnorms, 
 
 from toolkit.utils.dist_utils import (init_distributed_mode, is_main_process,
                                       get_world_size, save_on_master)
-
+from toolkit.utils.python_utils import merge_dict_with_prefix
 from toolkit.utils.logger import MetricLogger
 from toolkit.utils.loss import build_loss
 from toolkit.utils.plots import show
@@ -383,8 +383,8 @@ def train_esvit(args):
 
             del save_dict
 
-            log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                         'epoch': epoch}
+            log_stats = merge_dict_with_prefix({},train_stats, "train_")
+            log_stats["epoch"] = epoch
 
             if is_main_process():
                 with (Path(fold_save_dir / "log.txt")).open("a") as f:

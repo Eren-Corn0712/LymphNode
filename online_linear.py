@@ -19,6 +19,7 @@ import toolkit.models.resnet as resnet
 from toolkit.models.head import LinearClassifier
 from toolkit.utils.torch_utils import de_parallel, time_sync, accuracy, detach_to_cpu_numpy
 from toolkit.utils.dist_utils import save_on_master, is_main_process, get_world_size
+from toolkit.utils.python_utils import merge_dict_with_prefix
 
 
 def run(
@@ -88,14 +89,13 @@ def run(
 
         scheduler.step()
         # TODO: Use new dict function to add prefix and merge two dict.
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                     'epoch': epoch}
+        log_stats = merge_dict_with_prefix({}, train_stats, "train_")
 
         test_stats = validate_network(val_loader, model, linear_classifier, args.n_last_blocks, depths)
 
         print(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
-        log_stats = {**{k: v for k, v in log_stats.items()},
-                     **{f'test_{k}': v for k, v in test_stats.items()}}
+        exclude = ("targets", "predicts")
+        log_stats = merge_dict_with_prefix(log_stats, test_stats, "test_", exclude=exclude)
 
         if is_main_process():
             with (Path(save_dir) / "log.txt").open("a") as f:
@@ -115,24 +115,23 @@ def run(
         f1 = f1_score(test_stats['targets'], test_stats['predicts'], average='weighted')
 
         if is_main_process():
-            # TODO: Name can replace to the dataset.classes
             if f1 > best_f1:
-                name = ['Benign', 'Malignant']
+                name = train_loader.dataset.classes
                 best_acc, best_f1 = test_stats["acc1"], f1
                 print(f'Max accuracy so far: {best_acc:.4f}% F1-Score: {f1:.4f}')
 
                 save_on_master(save_dict, best_w)
 
                 cls_report = classification_report(
-                    test_stats['target'],
-                    test_stats['predict'],
+                    test_stats["targets"],
+                    test_stats["predicts"],
                     target_names=name, output_dict=True)
 
                 pd.DataFrame(cls_report).to_csv(save_dir / 'best.csv')
                 best_result = cls_report
 
-                cm = confusion_matrix(test_stats['target'],
-                                      test_stats['predict'])
+                cm = confusion_matrix(test_stats["targets"],
+                                      test_stats["predicts"])
 
                 cm = pd.DataFrame(cm, name, name)
 
