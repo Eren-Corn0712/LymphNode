@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 
+from toolkit.utils import LOGGER
 from typing import Dict
 
 
@@ -302,5 +303,5 @@ def build_loss(args, device) -> Dict:
         ).to(device)
 
     s = " ".join(v.__class__.__name__ for k, v in criterion.items())
-    print(f"Criterion is {s}")
+    LOGGER.info(f"Criterion is {s}")
     return criterion

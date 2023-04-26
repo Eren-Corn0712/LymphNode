@@ -3,6 +3,7 @@ import toolkit.models.resnet as resnet
 
 from toolkit.models.head import DINOHead
 from toolkit.models.care import AttnHead
+from toolkit.utils import LOGGER
 
 
 def create_teacher_student(args):
@@ -54,4 +55,5 @@ def create_teacher_student(args):
     else:
         raise ValueError(f"Unknown architecture: {args.arch}")
 
+    LOGGER.info(f"Student and Teacher are built: they are both {args.arch} network.")
     return teacher, student

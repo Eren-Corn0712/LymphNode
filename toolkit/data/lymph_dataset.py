@@ -1,19 +1,13 @@
 import glob
-from typing import List, Tuple, Dict
-
-import cv2
 import numpy as np
-import torch
-import torchvision
-
-from tqdm import tqdm
+from typing import List, Tuple, Dict
 from abc import ABC
 from pathlib import Path
 from torch.utils.data import Dataset
 from torchvision.datasets.folder import find_classes
 from sklearn.model_selection import StratifiedKFold
 from toolkit.data.utils import IMG_FORMATS
-from toolkit.utils.files import find_files
+from toolkit.utils import LOGGER
 from toolkit.utils.python_utils import copy_attr
 from PIL import Image
 
@@ -116,18 +110,19 @@ class KFoldLymphDataset(LymphBaseDataset):
                 x.append(l)
         return x
 
-    def check_dataset(self, train, test, key_name='patient_id'):
+    @staticmethod
+    def check_dataset(train, test, key_name='patient_id'):
         train_check = set([t[key_name] for t in train])
         test_check = set([t[key_name] for t in test])
         merged_set = train_check.union(test_check)
         if len(merged_set) == len(train_check) + len(test_check):
-            print("No duplicates found.")
+            LOGGER.info("No duplicates found.")
         else:
-            print("Duplicates found.")
+            LOGGER.info("Duplicates found.")
             raise ValueError(f"Key {key_name} Duplicates found.")
 
-        print("train data Patient id:", train_check)
-        print("test data Patient id:", test_check)
+        LOGGER.info(f"train data Patient id: {' '.join(s for s in train_check)}")
+        LOGGER.info(f"test data Patient id: {' '.join(s for s in test_check)}")
 
     def __len__(self):
         return len(self.labels)

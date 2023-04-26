@@ -6,7 +6,7 @@ from torchvision.transforms import functional as F
 from torchvision.transforms import autoaugment, transforms
 from torchvision.transforms.functional import InterpolationMode
 from typing import Tuple
-from PIL import ImageFilter, ImageOps, Image
+from PIL import ImageOps, Image
 
 
 class ResizePadding(object):
@@ -82,6 +82,8 @@ class Solarization(object):
             return img
 
 
+
+
 class DataAugmentationLymphNode(object):
     def __init__(self, global_crops_scale, local_crops_scale, local_crops_number, local_crops_size=96):
         normalize = transforms.Compose([
@@ -99,13 +101,15 @@ class DataAugmentationLymphNode(object):
         ])
 
         self.global_transfo1 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
+            transforms.RandomResizedCrop(224, scale=global_crops_scale,
+                                         interpolation=transforms.InterpolationMode.BICUBIC),
             flip_and_color_jitter,
             GaussianBlur(p=1.0),
             normalize,
         ])
         self.global_transfo2 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
+            transforms.RandomResizedCrop(224, scale=global_crops_scale,
+                                         interpolation=transforms.InterpolationMode.BICUBIC),
             flip_and_color_jitter,
             GaussianBlur(p=0.1),
             Solarization(0.2),
@@ -342,7 +346,12 @@ class RandomCutmix(torch.nn.Module):
         target_rolled = target.roll(1, 0)
 
         # Implemented as on cutmix paper, page 12 (with minor corrections on typos).
-        lambda_param = float(torch._sample_dirichlet(torch.tensor([self.alpha, self.alpha]))[0])
+        lambda_param = float(
+            torch._sample_dirichlet(torch.tensor(
+                [self.alpha, self.alpha])
+            )[0]
+        )
+
         _, H, W = F.get_dimensions(batch)
 
         r_x = torch.randint(W, (1,))

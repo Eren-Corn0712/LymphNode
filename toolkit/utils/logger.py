@@ -74,10 +74,10 @@ class SmoothedValue:
 
 
 class MetricLogger(object):
-    def __init__(self, delimiter="\t", output_file=None):
+    def __init__(self, delimiter="\t", save_dir=None):
         self.meters = defaultdict(SmoothedValue)
         self.delimiter = delimiter
-        self.output_file = output_file
+        self.save_dir = save_dir
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -106,8 +106,8 @@ class MetricLogger(object):
     def add_meter(self, name, meter):
         self.meters[name] = meter
 
-    def dump_in_output_file(self, iteration, iter_time, data_time):
-        if self.output_file is None or not is_main_process():
+    def dump_in_save_file(self, iteration, iter_time, data_time):
+        if self.save_dir is None or not is_main_process():
             return
         dict_to_dump = dict(
             iteration=iteration,
@@ -115,7 +115,12 @@ class MetricLogger(object):
             data_time=data_time,
         )
         dict_to_dump.update({k: v.median for k, v in self.meters.items()})
-        with open(self.output_file, "a") as f:
+
+        for key in dict_to_dump:
+            if isinstance(dict_to_dump[key], float):
+                dict_to_dump[key] = round(dict_to_dump[key], 4)
+
+        with open(self.save_dir / 'log.json', "a") as f:
             f.write(json.dumps(dict_to_dump) + "\n")
 
     def log_every(self, iterable, print_freq, header=None, n_iterations=None, start_iteration=0):
@@ -150,7 +155,7 @@ class MetricLogger(object):
             yield obj
             iter_time.update(time.time() - end)
             if i % print_freq == 0 or i == n_iterations - 1:
-                self.dump_in_output_file(iteration=i, iter_time=iter_time.avg, data_time=data_time.avg)
+                self.dump_in_save_file(iteration=i, iter_time=iter_time.avg, data_time=data_time.avg)
                 eta_seconds = iter_time.global_avg * (n_iterations - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():

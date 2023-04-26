@@ -181,42 +181,26 @@ def train_esvit(args):
     device = torch.device(args.device)
     # ============ preparing data ... ============
     k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=3, shuffle=True, random_state=args.seed)
+
     for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
+        # ============ K Folder training start  ... ============
         # Create folder output file
-        fold_save_dir = Path(args.save_dir) / f'{k + 1}-fold'
-        fold_save_dir.mkdir(parents=True, exist_ok=True)
+        args.fold_save_dir = Path(args.save_dir) / f'{k + 1}-fold'
+        args.fold_save_dir.mkdir(parents=True, exist_ok=True)
 
         # transformation for backbone, train linear, test linear
-        backbone_dataset = deepcopy(train_set)
+        backbone_dataset = deepcopy(train_set)  # For DINO Backbone training
 
         backbone_dataset.transform = create_transform(args, args.aug_opt)
         train_set.transform = create_transform(args, "eval_train")
         test_set.transform = create_transform(args, "eval_test")
 
-        train_sampler, test_sampler = creat_sampler(
-            args=args,
-            train_dataset=train_set,
-            test_dataset=test_set)
+        # create sampler
+        train_sampler, test_sampler = creat_sampler(args=args, train_dataset=train_set, test_dataset=test_set)
 
         data_loader = create_loader(args, backbone_dataset, sampler=train_sampler)
         train_loader = create_loader(args, train_set, sampler=train_sampler)
         val_loader = create_loader(args, test_set, sampler=test_sampler)
-
-        # if is_main_process():
-        #     # May be have bug....
-        #     views = next(iter(data_loader))['img']
-        #     train_imgs = next(iter(train_loader))['img']
-        #     val_imgs = next(iter(val_loader))['img']
-        #
-        #     show_num = min(2, args.batch_size_per_gpu)
-        #     for i in range(show_num):
-        #         global_view = [view[i] for view in views[:2]]
-        #         local_view = [view[i] for view in views[2:]]
-        #         show(make_grid(global_view), fold_save_dir, f'{i}-global-view')
-        #         show(make_grid(local_view), fold_save_dir, f'{i}-local-view')
-        #     show(make_grid(train_imgs[:show_num]), fold_save_dir, f'train-imgs')
-        #     show(make_grid(val_imgs[:show_num]), fold_save_dir, f'val-imgs')
-        #     del views, train_imgs, val_imgs
 
         # ============ building student and teacher networks ... ============
         teacher, student = create_teacher_student(args)
@@ -237,8 +221,6 @@ def train_esvit(args):
         # there is no backpropagation through the teacher, so no need for gradients
         for p in teacher.parameters():
             p.requires_grad = False
-
-        LOGGER.info(f"Student and Teacher are built: they are both {args.arch} network.")
 
         model_info(de_parallel(teacher), imgsz=224)
         model_info(de_parallel(student), imgsz=224)
@@ -286,7 +268,7 @@ def train_esvit(args):
             LOGGER.info(f'Resumed from {args.pretrained_weights_ckpt}')
 
         restart_from_checkpoint(
-            str(fold_save_dir / "last.pth"),
+            str(args.fold_save_dir / "last.pth"),
             run_variables=to_restore,
             student=de_parallel(student),
             teacher=de_parallel(teacher),
@@ -300,7 +282,7 @@ def train_esvit(args):
         LOGGER.info(f"Starting training of DINO! from epoch {start_epoch}")
 
         lowest_loss = sys.float_info.max
-        best_w, last_w = fold_save_dir / f'best.pth', fold_save_dir / f'last.pth'
+        best_w, last_w = args.fold_save_dir / f'best.pth', args.fold_save_dir / f'last.pth'
         for epoch in range(start_epoch, args.epochs):
             if args.distributed:
                 data_loader.sampler.set_epoch(epoch)
@@ -334,7 +316,7 @@ def train_esvit(args):
             save_on_master(save_dict, last_w)
             if train_stats["loss"] < lowest_loss:
                 lowest_loss = train_stats["loss"]
-                LOGGER.info(f"The lowest loss {lowest_loss} model save on master {best_w}")
+                LOGGER.info(f"The lowest loss {lowest_loss:0.3f} model save path: {best_w}")
                 save_on_master(save_dict, best_w)
 
             del save_dict
@@ -342,8 +324,12 @@ def train_esvit(args):
             log_stats = merge_dict_with_prefix({}, train_stats, "train_")
             log_stats["epoch"] = epoch
 
+            for key in log_stats:
+                if isinstance(log_stats[key], float):
+                    log_stats[key] = round(log_stats[key], 4)
+
             if is_main_process():
-                with (Path(fold_save_dir / "log.txt")).open("a") as f:
+                with (Path(args.fold_save_dir / "log.txt")).open("a") as f:
                     f.write(json.dumps(log_stats) + "\n")
 
             # features, labels = get_features(val_loader,
@@ -370,7 +356,7 @@ def train_esvit(args):
             val_loader=val_loader,
             model=de_parallel(teacher),
             args=args,
-            save_dir=fold_save_dir / f'best_linear_eval',
+            save_dir=args.fold_save_dir / f'best_linear_eval',
             epochs=args.linear_epochs,
             lr=args.linear_lr
         )
@@ -387,19 +373,14 @@ def train_esvit(args):
             val_loader=val_loader,
             model=de_parallel(teacher),
             args=args,
-            save_dir=fold_save_dir / f'last_linear_eval',
+            save_dir=args.fold_save_dir / f'last_linear_eval',
             epochs=args.linear_epochs,
             lr=args.linear_lr
         )
 
-        # save result
+        # save linear eval result
         best_results.append(best_result)
         last_results.append(last_result)
-
-        total_time = time.time() - start_time
-        total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-
-        LOGGER.info('Training time {}'.format(total_time_str))
 
     if is_main_process():
         best_average = average_classification_reports(best_results)
@@ -450,7 +431,7 @@ def train_one_epoch(
 
     device = get_model_device(student)
 
-    metric_logger = MetricLogger(delimiter=" ")
+    metric_logger = MetricLogger(delimiter=" ", save_dir=None)
     header = 'Epoch:[{}/{}]'.format(epoch, args.epochs)
     for it, batch in enumerate(metric_logger.log_every(data_loader, 10, header)):
         # update weight decay and learning rate according to their schedule
