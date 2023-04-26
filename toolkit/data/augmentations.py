@@ -55,26 +55,16 @@ class Equalize(object):
         return img
 
 
-class GaussianBlur(object):
+class GaussianBlur(transforms.RandomApply):
     """
     Apply Gaussian Blur to the PIL image.
     """
 
-    def __init__(self, p=0.5, radius_min=0.1, radius_max=2.):
-        self.prob = p
-        self.radius_min = radius_min
-        self.radius_max = radius_max
-
-    def __call__(self, img):
-        do_it = random.random() <= self.prob
-        if not do_it:
-            return img
-
-        return img.filter(
-            ImageFilter.GaussianBlur(
-                radius=random.uniform(self.radius_min, self.radius_max)
-            )
-        )
+    def __init__(self, *, p: float = 0.5, radius_min: float = 0.1, radius_max: float = 2.0):
+        # NOTE: torchvision is applying 1 - probability to return the original image
+        keep_p = 1 - p
+        transform = transforms.GaussianBlur(kernel_size=9, sigma=(radius_min, radius_max))
+        super().__init__(transforms=[transform], p=keep_p)
 
 
 class Solarization(object):
@@ -111,13 +101,13 @@ class DataAugmentationLymphNode(object):
         self.global_transfo1 = transforms.Compose([
             transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
             flip_and_color_jitter,
-            GaussianBlur(1.0),
+            GaussianBlur(p=1.0),
             normalize,
         ])
         self.global_transfo2 = transforms.Compose([
             transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
             flip_and_color_jitter,
-            GaussianBlur(0.1),
+            GaussianBlur(p=0.1),
             Solarization(0.2),
             normalize,
         ])

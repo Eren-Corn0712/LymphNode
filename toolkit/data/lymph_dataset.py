@@ -102,6 +102,7 @@ class KFoldLymphDataset(LymphBaseDataset):
                 test_labels += self.search_labels(int(label), id)
 
             self.check_dataset(train_labels, test_labels, 'patient_id')
+
             train_dataset, test_dataset = WrapperFoldDataset(train_labels), WrapperFoldDataset(test_labels)
             copy_attr(train_dataset, self, include=("class_to_idx", "classes"))
             copy_attr(test_dataset, self, include=("class_to_idx", "classes"))
@@ -119,12 +120,15 @@ class KFoldLymphDataset(LymphBaseDataset):
         train_check = set([t[key_name] for t in train])
         test_check = set([t[key_name] for t in test])
         merged_set = train_check.union(test_check)
-
         if len(merged_set) == len(train_check) + len(test_check):
             print("No duplicates found.")
         else:
             print("Duplicates found.")
             raise ValueError(f"Key {key_name} Duplicates found.")
+
+        print("train data Patient id:", train_check)
+        print("test data Patient id:", test_check)
+
     def __len__(self):
         return len(self.labels)
 

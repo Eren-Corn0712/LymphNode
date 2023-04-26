@@ -200,7 +200,7 @@ def restart_from_checkpoint(ckp_path, run_variables=None, **kwargs):
     """
     if not os.path.isfile(ckp_path):
         return
-    print("Found checkpoint at {}".format(ckp_path))
+    LOGGER.info("Found checkpoint at {}".format(ckp_path))
 
     # open checkpoint file
     checkpoint = torch.load(ckp_path, map_location="cpu")
@@ -212,15 +212,15 @@ def restart_from_checkpoint(ckp_path, run_variables=None, **kwargs):
         if key in checkpoint and value is not None:
             try:
                 msg = value.load_state_dict(checkpoint[key], strict=False)
-                print("=> loaded {} from checkpoint '{}' with msg {}".format(key, ckp_path, msg))
+                LOGGER.info("=> loaded {} from checkpoint '{}' with msg {}".format(key, ckp_path, msg))
             except TypeError:
                 try:
                     msg = value.load_state_dict(checkpoint[key])
-                    print("=> loaded {} from checkpoint '{}'".format(key, ckp_path))
+                    LOGGER.info("=> loaded {} from checkpoint '{}'".format(key, ckp_path))
                 except ValueError:
-                    print("=> failed to load {} from checkpoint '{}'".format(key, ckp_path))
+                    LOGGER.info("=> failed to load {} from checkpoint '{}'".format(key, ckp_path))
         else:
-            print("=> failed to load {} from checkpoint '{}'".format(key, ckp_path))
+            LOGGER.info("=> failed to load {} from checkpoint '{}'".format(key, ckp_path))
 
     # re load variable important for the run
     if run_variables is not None:
@@ -332,13 +332,13 @@ def load_pretrained_weights(model, pretrained_weights, checkpoint_key):
     if os.path.isfile(pretrained_weights):
         state_dict = torch.load(pretrained_weights, map_location="cpu")
         if checkpoint_key is not None and checkpoint_key in state_dict:
-            print(f"Take key {checkpoint_key} in provided checkpoint dict")
+            LOGGER.info(f"Take key {checkpoint_key} in provided checkpoint dict")
             state_dict = state_dict[checkpoint_key]
         state_dict = {k: v for k, v in state_dict.items()}
         msg = model.load_state_dict(state_dict, strict=True)
         LOGGER.info(colorstr('Pretrained weights found at {} and loaded with msg: {}'.format(pretrained_weights, msg)))
     else:
-        print("Please use the `--pretrained_weights` argument to indicate the path of the checkpoint to evaluate.")
+        LOGGER.info("Please use the `--pretrained_weights` argument to indicate the path of the checkpoint to evaluate.")
         LOGGER.info(colorstr("There is no reference weights available for this model => We use random weights."))
 
 
@@ -535,7 +535,9 @@ def build_optimizer(optimizer: str, model: nn.Module) -> torch.optim.Optimizer:
     elif optimizer == "lars":
         optimizer = LARS(params_groups)  # to use with convnet and large batches
     else:
-        raise ValueError("Unknown optimizer")
+        raise ValueError(f"Unknown optimizer:{optimizer}")
+
+    LOGGER.info(f"Optimizer is {optimizer.__class__.__name__}")
     return optimizer
 
 

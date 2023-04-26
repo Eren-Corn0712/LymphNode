@@ -1,7 +1,11 @@
 import torch
 import time
 import datetime
-from toolkit.utils.dist_utils import reduce_across_processes
+import torch.distributed
+import json
+
+from toolkit.utils import LOGGER
+from toolkit.utils.dist_utils import is_main_process, is_enabled
 from collections import defaultdict, deque
 
 
@@ -18,16 +22,21 @@ class SmoothedValue:
         self.count = 0
         self.fmt = fmt
 
-    def update(self, value, n=1):
+    def update(self, value, num=1):
         self.deque.append(value)
-        self.count += n
-        self.total += value * n
+        self.count += num
+        self.total += value * num
 
     def synchronize_between_processes(self):
         """
+        Distributed synchronization of the metric
         Warning: does not synchronize the deque!
         """
-        t = reduce_across_processes([self.count, self.total])
+        if not is_enabled():
+            return
+        t = torch.tensor([self.count, self.total], dtype=torch.float64, device="cuda")
+        torch.distributed.barrier()
+        torch.distributed.all_reduce(t)
         t = t.tolist()
         self.count = int(t[0])
         self.total = t[1]
@@ -56,14 +65,19 @@ class SmoothedValue:
 
     def __str__(self):
         return self.fmt.format(
-            median=self.median, avg=self.avg, global_avg=self.global_avg, max=self.max, value=self.value
+            median=self.median,
+            avg=self.avg,
+            global_avg=self.global_avg,
+            max=self.max,
+            value=self.value,
         )
 
 
-class MetricLogger:
-    def __init__(self, delimiter="\t"):
+class MetricLogger(object):
+    def __init__(self, delimiter="\t", output_file=None):
         self.meters = defaultdict(SmoothedValue)
         self.delimiter = delimiter
+        self.output_file = output_file
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -77,12 +91,12 @@ class MetricLogger:
             return self.meters[attr]
         if attr in self.__dict__:
             return self.__dict__[attr]
-        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{attr}'")
+        raise AttributeError("'{}' object has no attribute '{}'".format(type(self).__name__, attr))
 
     def __str__(self):
         loss_str = []
         for name, meter in self.meters.items():
-            loss_str.append(f"{name}: {str(meter)}")
+            loss_str.append("{}: {}".format(name, str(meter)))
         return self.delimiter.join(loss_str)
 
     def synchronize_between_processes(self):
@@ -92,58 +106,80 @@ class MetricLogger:
     def add_meter(self, name, meter):
         self.meters[name] = meter
 
-    def log_every(self, iterable, print_freq, header=None):
-        i = 0
+    def dump_in_output_file(self, iteration, iter_time, data_time):
+        if self.output_file is None or not is_main_process():
+            return
+        dict_to_dump = dict(
+            iteration=iteration,
+            iter_time=iter_time,
+            data_time=data_time,
+        )
+        dict_to_dump.update({k: v.median for k, v in self.meters.items()})
+        with open(self.output_file, "a") as f:
+            f.write(json.dumps(dict_to_dump) + "\n")
+
+    def log_every(self, iterable, print_freq, header=None, n_iterations=None, start_iteration=0):
+        i = start_iteration
         if not header:
             header = ""
         start_time = time.time()
         end = time.time()
-        iter_time = SmoothedValue(fmt="{avg:.3f}")
-        data_time = SmoothedValue(fmt="{avg:.3f}")
-        space_fmt = ":" + str(len(str(len(iterable)))) + "d"
+        iter_time = SmoothedValue(fmt="{avg:.6f}")
+        data_time = SmoothedValue(fmt="{avg:.6f}")
+
+        if n_iterations is None:
+            n_iterations = len(iterable)
+
+        space_fmt = ":" + str(len(str(n_iterations))) + "d"
+
+        log_list = [
+            header,
+            "[{0" + space_fmt + "}/{1}]",
+            "eta: {eta}",
+            "{meters}",
+            "time: {time:.1f} ms",
+            "data: {data:.1f} ms",
+        ]
         if torch.cuda.is_available():
-            log_msg = self.delimiter.join(
-                [
-                    header,
-                    "{0" + space_fmt + "}/{1}",
-                    "eta: {eta}",
-                    "{meters}",
-                    "time: {time}",
-                    "data: {data}",
-                    "GPU mem: {memory:.3g} GB",
-                ]
-            )
-        else:
-            log_msg = self.delimiter.join(
-                [header, "{0" + space_fmt + "}/{1}", "eta: {eta}", "{meters}", "time: {time}", "data: {data}"]
-            )
+            log_list += ["mem: {memory:.3g}G"]
+
+        log_msg = self.delimiter.join(log_list)
+
         for obj in iterable:
             data_time.update(time.time() - end)
             yield obj
             iter_time.update(time.time() - end)
-            if i % print_freq == 0:
-                eta_seconds = iter_time.global_avg * (len(iterable) - i)
+            if i % print_freq == 0 or i == n_iterations - 1:
+                self.dump_in_output_file(iteration=i, iter_time=iter_time.avg, data_time=data_time.avg)
+                eta_seconds = iter_time.global_avg * (n_iterations - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():
-                    print(
+                    LOGGER.info(
                         log_msg.format(
                             i,
-                            len(iterable),
+                            n_iterations,
                             eta=eta_string,
                             meters=str(self),
-                            time=iter_time,
-                            data=data_time,
-                            memory=torch.cuda.memory_reserved() / 1E9,
+                            time=iter_time.avg * 1E3,
+                            data=data_time.avg * 1E3,
+                            memory=torch.cuda.memory_reserved() / 1E9,  # (GB)
                         )
                     )
                 else:
-                    print(
+                    LOGGER.info(
                         log_msg.format(
-                            i, len(iterable), eta=eta_string, meters=str(self), time=str(iter_time), data=str(data_time)
+                            i,
+                            n_iterations,
+                            eta=eta_string,
+                            meters=str(self),
+                            time=str(iter_time),
+                            data=str(data_time),
                         )
                     )
             i += 1
             end = time.time()
+            if i >= n_iterations:
+                break
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-        print(f"{header} Total time: {total_time_str}")
+        LOGGER.info("{} Total time: {} ({:.3f} s / it)".format(header, total_time_str, total_time / n_iterations))

@@ -12,30 +12,29 @@ import numpy as np
 
 import torch.backends.cuda
 
-import toolkit.models.swin_transformer as swin_transformer
-import toolkit.models.resnet as resnet
-
-from sklearn.metrics import classification_report
 from toolkit.data.lymph_dataset import KFoldLymphDataset
 
-from toolkit.utils import (yaml_load, yaml_save, yaml_print, bool_flag, average_classification_reports, print_options)
+from toolkit.utils import (yaml_save, bool_flag, average_classification_reports, print_options,
+                           LOGGER)
 from toolkit.utils.torch_utils import (init_seeds, de_parallel, has_batchnorms, cosine_scheduler,
-                                       time_sync, get_params_groups, LARS, MultiCropWrapper, load_pretrained_weights,
-                                       restart_from_checkpoint, clip_gradients, cancel_gradients_last_layer,
-                                       model_info, select_device, build_optimizer)
+                                       time_sync, load_pretrained_weights,
+                                       restart_from_checkpoint, get_model_device,
+                                       model_info, build_optimizer)
 
 from toolkit.utils.dist_utils import (init_distributed_mode, is_main_process,
                                       get_world_size, save_on_master)
+
+from toolkit.data.sampler import creat_sampler
+
 from toolkit.utils.python_utils import merge_dict_with_prefix
 from toolkit.utils.logger import MetricLogger
 from toolkit.utils.loss import build_loss
 from toolkit.utils.plots import show
-from toolkit.models.head import DINOHead
-from toolkit.models.care import AttnHead
-
-from toolkit.data.bulid_dataloader import build_dataloader
-from toolkit.data.augment import create_transform
 from torchvision.utils import make_grid
+
+from toolkit.data.bulid_dataloader import create_loader
+from toolkit.models import create_teacher_student
+from toolkit.data.augmentations import create_transform
 
 from online_linear import run
 
@@ -194,7 +193,14 @@ def train_esvit(args):
         train_set.transform = create_transform(args, "eval_train")
         test_set.transform = create_transform(args, "eval_test")
 
-        data_loader, train_loader, val_loader = build_dataloader(args, backbone_dataset, train_set, test_set)
+        train_sampler, test_sampler = creat_sampler(
+            args=args,
+            train_dataset=train_set,
+            test_dataset=test_set)
+
+        data_loader = create_loader(args, backbone_dataset, sampler=train_sampler)
+        train_loader = create_loader(args, train_set, sampler=train_sampler)
+        val_loader = create_loader(args, test_set, sampler=test_sampler)
 
         # if is_main_process():
         #     # May be have bug....
@@ -213,55 +219,7 @@ def train_esvit(args):
         #     del views, train_imgs, val_imgs
 
         # ============ building student and teacher networks ... ============
-
-        # if the network is a 4-stage vision transformer (i.e. swin)
-        if args.arch in swin_transformer.__dict__.keys():
-            student = swin_transformer.__dict__[args.arch]()
-            teacher = swin_transformer.__dict__[args.arch](is_teacher=True)
-
-            for model in [student, teacher]:
-                model.head = DINOHead(
-                    model.num_features,
-                    args.out_dim,
-                    use_bn=args.use_bn_in_head,
-                    norm_last_layer=args.norm_last_layer,
-                )
-                if args.use_dense_prediction:
-                    setattr(model, "use_dense_prediction", args.use_dense_prediction)
-                    model.dense_head = DINOHead(
-                        model.num_features,
-                        args.out_dim,
-                        use_bn=args.use_bn_in_head,
-                        norm_last_layer=args.norm_last_layer)
-
-        # otherwise, we check if the architecture is in torchvision models
-        elif args.arch in resnet.__dict__.keys():
-            student = resnet.__dict__[args.arch]()
-            teacher = resnet.__dict__[args.arch]()
-            for model in [student, teacher]:
-                model.head = DINOHead(
-                    model.num_features,
-                    args.out_dim,
-                    use_bn=args.use_bn_in_head,
-                    norm_last_layer=args.norm_last_layer,
-                )
-                if args.use_dense_prediction:
-                    setattr(model, "use_dense_prediction", args.use_dense_prediction)
-                    model.dense_head = DINOHead(
-                        model.num_features,
-                        args.out_dim,
-                        use_bn=args.use_bn_in_head,
-                        norm_last_layer=args.norm_last_layer)
-
-                if args.use_attention_head:
-                    setattr(model, "use_attention_head", args.use_attention_head)
-                    model.attn_head = AttnHead(
-                        model.num_features,
-                        args.out_dim,
-                        norm_last_layer=args.norm_last_layer
-                    )
-        else:
-            raise ValueError(f"Unknown architecture: {args.arch}")
+        teacher, student = create_teacher_student(args)
 
         # Move Networks To GPU
         student, teacher = student.to(device), teacher.to(device)
@@ -280,20 +238,19 @@ def train_esvit(args):
         for p in teacher.parameters():
             p.requires_grad = False
 
-        print(f"Student and Teacher are built: they are both {args.arch} network.")
+        LOGGER.info(f"Student and Teacher are built: they are both {args.arch} network.")
 
         model_info(de_parallel(teacher), imgsz=224)
         model_info(de_parallel(student), imgsz=224)
 
         # ============ preparing loss ... ============
         criterion = build_loss(args, device)
-        print("Use loss function", ' '.join(criterion.keys()))
 
         # ============ preparing optimizer ... ============
         optimizer = build_optimizer(optimizer=args.optimizer, model=student)
 
         # for mixed precision training
-        scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
+        scaler = torch.cuda.amp.GradScaler() if args.amp else None
 
         # ============ init schedulers ... ============
         lr_schedule = cosine_scheduler(
@@ -311,7 +268,7 @@ def train_esvit(args):
         momentum_schedule = cosine_scheduler(args.momentum_teacher, 1,
                                              args.epochs, len(data_loader))
 
-        print(f"Loss, optimizer and schedulers ready.")
+        LOGGER.info(f"Loss, optimizer and schedulers ready.")
 
         # ============ optionally resume training ... ============
         to_restore = {"epoch": 0}
@@ -326,7 +283,7 @@ def train_esvit(args):
                 scaler=scaler,
                 **criterion,
             )
-            print(f'Resumed from {args.pretrained_weights_ckpt}')
+            LOGGER.info(f'Resumed from {args.pretrained_weights_ckpt}')
 
         restart_from_checkpoint(
             str(fold_save_dir / "last.pth"),
@@ -340,7 +297,7 @@ def train_esvit(args):
         start_epoch = to_restore["epoch"]
 
         start_time = time.time()
-        print(f"Starting training of DINO! from epoch {start_epoch}")
+        LOGGER.info(f"Starting training of DINO! from epoch {start_epoch}")
 
         lowest_loss = sys.float_info.max
         best_w, last_w = fold_save_dir / f'best.pth', fold_save_dir / f'last.pth'
@@ -370,20 +327,19 @@ def train_esvit(args):
                 'args': vars(args),
                 **{f"{k}": v.state_dict() for k, v in criterion.items()}
             }
-            if scaler is not None:
-                save_dict['scaler'] = scaler.state_dict()
+            if scaler:
+                save_dict["scaler"] = scaler.state_dict()
 
             # Save the last ,best and delete weight
             save_on_master(save_dict, last_w)
-
             if train_stats["loss"] < lowest_loss:
                 lowest_loss = train_stats["loss"]
-                print(f"The lowest loss {lowest_loss} model save on master {best_w}")
+                LOGGER.info(f"The lowest loss {lowest_loss} model save on master {best_w}")
                 save_on_master(save_dict, best_w)
 
             del save_dict
 
-            log_stats = merge_dict_with_prefix({},train_stats, "train_")
+            log_stats = merge_dict_with_prefix({}, train_stats, "train_")
             log_stats["epoch"] = epoch
 
             if is_main_process():
@@ -443,7 +399,7 @@ def train_esvit(args):
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
 
-        print('Training time {}'.format(total_time_str))
+        LOGGER.info('Training time {}'.format(total_time_str))
 
     if is_main_process():
         best_average = average_classification_reports(best_results)
@@ -477,10 +433,22 @@ def get_features(val_loader, model, n, avgpool, depths):
     return features, labels
 
 
-def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_schedule, wd_schedule, momentum_schedule,
-                    epoch, scaler, args):
+def train_one_epoch(
+        student,
+        teacher,
+        criterion,
+        data_loader,
+        optimizer,
+        lr_schedule,
+        wd_schedule,
+        momentum_schedule,
+        epoch,
+        scaler,
+        args,
+):
     student.train(), teacher.eval()
-    device = next(student.parameters()).device  # get model device
+
+    device = get_model_device(student)
 
     metric_logger = MetricLogger(delimiter=" ")
     header = 'Epoch:[{}/{}]'.format(epoch, args.epochs)
@@ -540,7 +508,7 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
                     total_items = {**total_items, **loss_items}
 
         if not math.isfinite(total_loss.item()):
-            print("Loss is {}, stopping training".format(total_loss.item()))
+            LOGGER.info("Loss is {}, stopping training".format(total_loss.item()))
             # ============ writing logs on a NaN for debug ... ============
             save_dict = {
                 'student': de_parallel(student).state_dict(),
@@ -558,12 +526,19 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
             sys.exit(1)
 
         # student update
-        scaler.scale(total_loss).backward()
-        scaler.unscale_(optimizer)  # unscale gradients
-        torch.nn.utils.clip_grad_norm_(student.parameters(), max_norm=10.0)  # clip gradients
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            if args.clip_grad is not None:
+                # we should unscale the gradients of optimizes assigned params if you do gradient clipping
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(student.parameters(), args.clip_grad)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if args.clip_grad is not None:
+                nn.utils.clip_grad_norm_(student.parameters(), args.clip_grad)
+            optimizer.step()
 
         # EMA update for the teacher
         with torch.no_grad():
@@ -572,7 +547,7 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
                 param_k = de_parallel(teacher).state_dict()[name]
                 param_k.mul_(m).add_((1 - m) * param_q.detach())
 
-        # logging
+        # Logging
         time_sync()
         metric_logger.update(loss=sum([v for v in total_items.values()]))
         metric_logger.update(**total_items)
@@ -581,7 +556,7 @@ def train_one_epoch(student, teacher, criterion, data_loader, optimizer, lr_sche
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
+    LOGGER.info(f"Averaged stats: {metric_logger}")
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 

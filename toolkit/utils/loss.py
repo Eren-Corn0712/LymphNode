@@ -53,7 +53,6 @@ class DINOLoss(nn.Module):
                     # we skip cases where student and teacher operate on the same view
                     continue
                 if targets_mixup:
-                    # print(targets_mixup[v])
                     loss = -torch.sum(targets_mixup[v] * torch.mm(q, F.log_softmax(student_out[v], dim=-1).t()), dim=-1)
                 else:
                     loss = torch.sum(-q * F.log_softmax(student_out[v], dim=-1), dim=-1)
@@ -302,4 +301,6 @@ def build_loss(args, device) -> Dict:
             args.epochs,
         ).to(device)
 
+    s = " ".join(v.__class__.__name__ for k, v in criterion.items())
+    print(f"Criterion is {s}")
     return criterion

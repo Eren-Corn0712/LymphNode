@@ -51,3 +51,13 @@ def build_dataloader(args, backbone_dataset, train_dataset, test_dataset):
         pin_memory=True,
     )
     return backbone_data_loader, train_loader, test_loader
+
+
+def create_loader(args, dataset, sampler):
+    return DataLoader(
+        dataset=dataset,
+        batch_size=args.batch_size_per_gpu,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        sampler=sampler
+    )
