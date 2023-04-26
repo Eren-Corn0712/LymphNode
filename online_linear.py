@@ -16,9 +16,13 @@ from pathlib import Path
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 import toolkit.models.swin_transformer as swin_transformer
 import toolkit.models.resnet as resnet
+
+from toolkit.utils import LOGGER
 from toolkit.models.head import LinearClassifier
-from toolkit.utils.torch_utils import de_parallel, time_sync, accuracy
+from toolkit.utils.torch_utils import de_parallel, time_sync, accuracy, detach_to_cpu_numpy, get_model_device
 from toolkit.utils.dist_utils import save_on_master, is_main_process, get_world_size
+from toolkit.utils.python_utils import merge_dict_with_prefix
+from toolkit.utils.logger import (MetricLogger, SmoothedValue)
 
 
 def run(
@@ -38,9 +42,9 @@ def run(
         for i, d in enumerate(depths):
             num_features += [int(embed_dim * 2 ** i)] * d
 
-        print(num_features)
+        LOGGER.info(f"num_features: {num_features}")
         num_features_linear = sum(num_features[-args.n_last_blocks:])
-        print(f'num_features_linear {num_features_linear}')
+        LOGGER.info(f'num_features_linear {num_features_linear}')
         linear_classifier = LinearClassifier(num_features_linear, args.num_labels)
 
     elif args.arch in resnet.__dict__.keys():
@@ -50,10 +54,9 @@ def run(
         for i, d in enumerate(depths):
             num_features += [int(embed_dim * 2 ** i)] * d
 
-        print(num_features)
-        args.n_last_blocks = 1
+        LOGGER.info(f"num_features: {num_features}")
         num_features_linear = sum(num_features[-args.n_last_blocks:])
-        print(f'num_features_linear {num_features_linear}')
+        LOGGER.info(f'num_features_linear {num_features_linear}')
         linear_classifier = LinearClassifier(num_features_linear, args.num_labels)
 
     else:
@@ -89,14 +92,14 @@ def run(
 
         scheduler.step()
 
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                     'epoch': epoch}
+        log_stats = merge_dict_with_prefix({}, train_stats, "train_")
 
-        test_stats, result = validate_network(val_loader, model, linear_classifier, args.n_last_blocks, depths)
+        test_stats = validate_network(val_loader, model, linear_classifier, args.n_last_blocks, depths)
 
-        print(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
-        log_stats = {**{k: v for k, v in log_stats.items()},
-                     **{f'test_{k}': v for k, v in test_stats.items()}}
+        exclude = ("targets", "predicts")
+        log_stats = merge_dict_with_prefix(log_stats, test_stats, "test_", exclude=exclude)
+
+        LOGGER.info(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
 
         if is_main_process():
             with (Path(save_dir) / "log.txt").open("a") as f:
@@ -104,7 +107,7 @@ def run(
 
         save_dict = {
             "epoch": epoch,
-            "state_dict": (de_parallel(linear_classifier)).state_dict(),
+            "state_dict": de_parallel(linear_classifier).state_dict(),
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
             "best_acc": best_acc,
@@ -113,23 +116,27 @@ def run(
 
         save_on_master(save_dict, last_w)
 
-        f1 = f1_score(result['target'], result['predict'], average='weighted')
+        f1 = f1_score(test_stats['targets'], test_stats['predicts'], average='weighted')
 
         if is_main_process():
             if f1 > best_f1:
-                name = ['Benign', 'Malignant']
+                name = train_loader.dataset.classes
                 best_acc, best_f1 = test_stats["acc1"], f1
-                print(f'Max accuracy so far: {best_acc:.4f}% F1-Score: {f1:.4f}')
+                LOGGER.info(f'Max accuracy so far: {best_acc:.4f}% F1-Score: {f1:.4f}')
 
                 save_on_master(save_dict, best_w)
 
                 cls_report = classification_report(
-                    result['target'], result['predict'], target_names=name, output_dict=True)
+                    test_stats["targets"],
+                    test_stats["predicts"],
+                    target_names=name, output_dict=True)
 
                 pd.DataFrame(cls_report).to_csv(save_dir / 'best.csv')
                 best_result = cls_report
 
-                cm = confusion_matrix(result['target'], result['predict'])
+                cm = confusion_matrix(test_stats["targets"],
+                                      test_stats["predicts"])
+
                 cm = pd.DataFrame(cm, name, name)
 
                 plt.figure(figsize=(9, 6))
@@ -141,18 +148,19 @@ def run(
 
         del save_dict
 
-    print("Training of the supervised linear classifier on frozen features completed.\n"
-          "Top-1 test accuracy: {acc:.1f}".format(acc=best_acc))
+    LOGGER.info("Training of the supervised linear classifier on frozen features completed.\n"
+                "Top-1 test accuracy: {acc:.1f}".format(acc=best_acc))
     return best_result
 
 
 def train(model, linear_classifier, optimizer, loader, epoch, n, depths):
     linear_classifier.train()
     model.eval()
-    device = next(model.parameters()).device  # get model device
 
-    metric_logger = toolkit.utils.logger.MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', toolkit.utils.logger.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    device = get_model_device(model)
+
+    metric_logger = MetricLogger(delimiter="  ")
+    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     for batch in metric_logger.log_every(loader, 20, header):
         # move to gpu
@@ -177,7 +185,7 @@ def train(model, linear_classifier, optimizer, loader, epoch, n, depths):
         # step
         optimizer.step()
 
-        # log
+        # Logging
         time_sync()
         metric_logger.update(acc1=acc1.item())
         metric_logger.update(loss=loss.item())
@@ -185,19 +193,20 @@ def train(model, linear_classifier, optimizer, loader, epoch, n, depths):
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
+    LOGGER.info(f"Averaged stats: {metric_logger}")
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def validate_network(val_loader, model, linear_classifier, n, depths):
     linear_classifier.eval()
     model.eval()
-    device = next(model.parameters()).device  # get model device
 
-    metric_logger = toolkit.utils.logger.MetricLogger(delimiter="  ")
+    device = get_model_device(model)
+
+    metric_logger = MetricLogger(delimiter="  ")
     header = 'Test:'
-    result = {'target': [], 'predict': []}
+    targets, predicts = [], []
     for batch in metric_logger.log_every(val_loader, 20, header):
         # move to gpu
         inp = batch['img'].to(device, non_blocking=True)
@@ -208,16 +217,21 @@ def validate_network(val_loader, model, linear_classifier, n, depths):
         output = linear_classifier(output)
         loss = nn.CrossEntropyLoss()(output, target)
 
-        acc1, _ = toolkit.utils.torch_utils.accuracy(output, target, topk=(1, 2))
+        acc1, _ = accuracy(output, target, topk=(1, 2))
 
         _, predict = torch.max(output.data, 1)
 
-        result['target'].extend(target.view(-1).detach().cpu().numpy())
-        result['predict'].extend(predict.view(-1).detach().cpu().numpy())
+        targets.extend(detach_to_cpu_numpy(target))
+        predicts.extend(detach_to_cpu_numpy(predict))
 
         batch_size = inp.shape[0]
         metric_logger.update(loss=loss.item())
-        metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
-    print('* Acc@1 {top1.global_avg:.3f} loss {losses.global_avg:.3f}'
-          .format(top1=metric_logger.acc1, losses=metric_logger.loss))
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, result
+        metric_logger.meters['acc1'].update(acc1.item(), num=batch_size)
+
+    LOGGER.info("* Acc@1 {top1.global_avg:.3f} loss {losses.global_avg:.3f}"
+                .format(top1=metric_logger.acc1, losses=metric_logger.loss))
+
+    states = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    states["targets"] = targets
+    states["predicts"] = predicts
+    return states

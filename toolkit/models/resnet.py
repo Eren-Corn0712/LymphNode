@@ -46,19 +46,21 @@ class ResnetWrapper(ResNet):
             num_patch.append(num_fea)
             del out_cls, out_fea
 
-        output_cls = torch.cat(output_cls)  # global view(2b, cout) global + local (10b,cout)
-        output_fea = torch.cat(output_fea)
-        attn_head = torch.cat(attn_head)
-
-        if hasattr(self, "head"):
+        if hasattr(self, "head") and output_cls:
+            output_cls = torch.cat(output_cls)
             output["head"] = getattr(self, 'head')(output_cls)
 
-        if hasattr(self, "dense_head"):
+        if hasattr(self, "dense_head") and output_fea:
+            output_fea = torch.cat(output_fea)
             output["dense_head"] = getattr(self, 'dense_head')(output_fea)
+            output["output_fea"] = output_fea
 
-        output["output_fea"] = output_fea
+        if hasattr(self, "attn_head"):
+            attn_head = torch.cat(attn_head)
+            output["attn_head"] = attn_head
+
         output["num_patch"] = num_patch
-        output["attn_head"] = attn_head
+
         return output
 
     def forward_features(self, x):
@@ -88,7 +90,10 @@ class ResnetWrapper(ResNet):
         all_depths = sum(depths)
         block_idx = all_depths - n
         # stage 1 forward
-        x = self.maxpool(self.relu(self.bn1(self.conv1(x))))
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
 
         # layer1 to 4 decomposition
         layers = [getattr(self, f"layer{i}") for i in range(1, 5)]

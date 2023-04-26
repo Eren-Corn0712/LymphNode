@@ -45,7 +45,7 @@ class DINOLoss(nn.Module):
         teacher_out = F.softmax((teacher_output - self.center) / temp, dim=-1)
         teacher_out = teacher_out.detach().chunk(2)
 
-        total_loss = 0
+        total_loss = torch.zeros(1, device=teacher_out[0].device)
         n_loss_terms = 0
         for iq, q in enumerate(teacher_out):
             for v in range(len(student_out)):
@@ -53,7 +53,6 @@ class DINOLoss(nn.Module):
                     # we skip cases where student and teacher operate on the same view
                     continue
                 if targets_mixup:
-                    # print(targets_mixup[v])
                     loss = -torch.sum(targets_mixup[v] * torch.mm(q, F.log_softmax(student_out[v], dim=-1).t()), dim=-1)
                 else:
                     loss = torch.sum(-q * F.log_softmax(student_out[v], dim=-1), dim=-1)
@@ -62,7 +61,10 @@ class DINOLoss(nn.Module):
         total_loss /= n_loss_terms
         self.update_center(teacher_output)
 
-        return total_loss
+        return (
+            total_loss.sum(),
+            {"global_loss": total_loss.item()}
+        )
 
     @torch.inference_mode()
     def update_center(self, teacher_output):
@@ -299,4 +301,6 @@ def build_loss(args, device) -> Dict:
             args.epochs,
         ).to(device)
 
+    s = " ".join(v.__class__.__name__ for k, v in criterion.items())
+    print(f"Criterion is {s}")
     return criterion

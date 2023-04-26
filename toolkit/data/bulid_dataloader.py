@@ -3,6 +3,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from torch.utils.data.sampler import WeightedRandomSampler
 
+from toolkit.data.sampler import RASampler
+
 
 def weight_sampler(dataset):
     targets = [d['label'] for d in dataset]
@@ -17,26 +19,23 @@ def weight_sampler(dataset):
 def build_dataloader(args, backbone_dataset, train_dataset, test_dataset):
     if args.distributed:
         if hasattr(args, "ra_sampler") and args.ra_sampler:
-            sampler = RASampler(backbone_dataset, shuffle=True, repetitions=args.ra_reps)
+            train_sampler = RASampler(train_dataset, shuffle=True, repetitions=args.ra_reps)
         else:
-            sampler = torch.utils.data.distributed.DistributedSampler(backbone_dataset)
-        sampler = torch.utils.data.distributed.DistributedSampler(backbone_dataset, shuffle=False)
+            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
     else:
-        sampler = torch.utils.data.RandomSampler(backbone_dataset)
-
-    train_sampler = torch.utils.data.RandomSampler(train_dataset)
-    test_sampler = torch.utils.data.SequentialSampler(test_dataset)
+        train_sampler = torch.utils.data.RandomSampler(train_dataset)
+        test_sampler = torch.utils.data.SequentialSampler(test_dataset)
 
     backbone_data_loader = DataLoader(
         backbone_dataset,
-        sampler=sampler,
+        sampler=train_sampler,
         batch_size=args.batch_size_per_gpu,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True,
     )
 
-    # sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = DataLoader(
         train_dataset,
         sampler=weight_sampler(train_dataset),
@@ -52,3 +51,13 @@ def build_dataloader(args, backbone_dataset, train_dataset, test_dataset):
         pin_memory=True,
     )
     return backbone_data_loader, train_loader, test_loader
+
+
+def create_loader(args, dataset, sampler):
+    return DataLoader(
+        dataset=dataset,
+        batch_size=args.batch_size_per_gpu,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        sampler=sampler
+    )

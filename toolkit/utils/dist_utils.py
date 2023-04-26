@@ -2,21 +2,16 @@ import os
 import torch
 import torch.distributed as dist
 
+from toolkit.utils import LOGGER
 
-def setup_for_distributed(is_master):
+def is_enabled() -> bool:
     """
-    This function disables printing when not in master process
+    Returns:
+        True if distributed training is enabled
     """
-    import builtins as __builtin__
+    return dist.is_available() and dist.is_initialized()
 
-    builtin_print = __builtin__.print
 
-    def print(*args, **kwargs):
-        force = kwargs.pop("force", False)
-        if is_master or force:
-            builtin_print(*args, **kwargs)
-
-    __builtin__.print = print
 
 
 def is_dist_avail_and_initialized():
@@ -70,14 +65,14 @@ def init_distributed_mode(args):
     elif hasattr(args, "rank"):
         pass
     else:
-        print("Not using distributed mode")
+        LOGGER.info("Not using distributed mode")
         args.distributed = False
         return
 
     args.distributed = True
 
     torch.cuda.set_device(args.gpu)
-    print(f"| distributed init (rank {args.rank}): {args.dist_url}", flush=True)
+    LOGGER.info(f"| distributed init (rank {args.rank}): {args.dist_url}", flush=True)
     torch.distributed.init_process_group(
         backend='nccl' if dist.is_nccl_available() else 'gloo', init_method=args.dist_url, world_size=args.world_size,
         rank=args.rank

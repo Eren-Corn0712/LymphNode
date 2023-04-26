@@ -1,7 +1,7 @@
 import torch
 
 from toolkit.data.lymph_dataset import KFoldLymphDataset
-from toolkit.data.augment import DataAugmentationLymphNodeOverlapping, DataAugmentationLymphNode
+from toolkit.data.augmentations import DataAugmentationLymphNodeOverlapping, DataAugmentationLymphNode
 from toolkit.utils.plots import show
 
 class TestClass(object):

@@ -13,25 +13,132 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Union
+from collections import defaultdict
 
 import cv2
 import numpy as np
 import torch
 import yaml
 
+# PyTorch Multi-GPU DDP Constants
+RANK = int(os.getenv('RANK', -1))
+LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
+WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
+
 # Constants
 FILE = Path(__file__).resolve()
+ROOT = FILE.parents[2]  # project root
 NUM_THREADS = min(8, max(1, os.cpu_count() - 1))  # number of YOLOv5 multiprocessing threads
-TQDM_BAR_FORMAT = '{l_bar}{bar:10}{r_bar}'  # tqdm bar format
+AUTOINSTALL = str(os.getenv('YOLO_AUTOINSTALL', True)).lower() == 'true'  # global auto-install mode
 VERBOSE = str(os.getenv('YOLO_VERBOSE', True)).lower() == 'true'  # global verbose mode
+TQDM_BAR_FORMAT = '{l_bar}{bar:10}{r_bar}'  # tqdm bar format
+LOGGING_NAME = 'toolkit'
 MACOS, LINUX, WINDOWS = (platform.system() == x for x in ['Darwin', 'Linux', 'Windows'])  # environment booleans
-LOGGING_NAME = 'Toolkit'
+
+# Settings
+torch.set_printoptions(linewidth=320, precision=4, profile='default')
+np.set_printoptions(linewidth=320, formatter={'float_kind': '{:11.5g}'.format})  # format short g, %precision=5
+cv2.setNumThreads(0)  # prevent OpenCV from multithreading (incompatible with PyTorch DataLoader)
+os.environ['NUMEXPR_MAX_THREADS'] = str(NUM_THREADS)  # NumExpr max threads
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'  # for deterministic training
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # suppress verbose TF compiler warnings in Colab
+
+
+class SimpleClass:
+    """
+    Ultralytics SimpleClass is a base class providing helpful string representation, error reporting, and attribute
+    access methods for easier debugging and usage.
+    """
+
+    def __str__(self):
+        """Return a human-readable string representation of the object."""
+        attr = []
+        for a in dir(self):
+            v = getattr(self, a)
+            if not callable(v) and not a.startswith('_'):
+                if isinstance(v, SimpleClass):
+                    # Display only the module and class name for subclasses
+                    s = f'{a}: {v.__module__}.{v.__class__.__name__} object'
+                else:
+                    s = f'{a}: {repr(v)}'
+                attr.append(s)
+        return f'{self.__module__}.{self.__class__.__name__} object with attributes:\n\n' + '\n'.join(attr)
+
+    def __repr__(self):
+        """Return a machine-readable string representation of the object."""
+        return self.__str__()
+
+    def __getattr__(self, attr):
+        """Custom attribute access error message with helpful information."""
+        name = self.__class__.__name__
+        raise AttributeError(f"'{name}' object has no attribute '{attr}'. See valid attributes below.\n{self.__doc__}")
+
+
+class IterableSimpleNamespace(SimpleNamespace):
+    """
+    Ultralytics IterableSimpleNamespace is an extension class of SimpleNamespace that adds iterable functionality and
+    enables usage with dict() and for loops.
+    """
+
+    def __iter__(self):
+        """Return an iterator of key-value pairs from the namespace's attributes."""
+        return iter(vars(self).items())
+
+    def __str__(self):
+        """Return a human-readable string representation of the object."""
+        return '\n'.join(f'{k}={v}' for k, v in vars(self).items())
+
+    def __getattr__(self, attr):
+        """Custom attribute access error message with helpful information."""
+        name = self.__class__.__name__
+        raise AttributeError(f"""
+            '{name}' object has no attribute '{attr}'. This may be caused by a modified or out of date ultralytics
+            'default.yaml' file.\nPlease update your code with 'pip install -U ultralytics' and if necessary replace
+            {DEFAULT_CFG_PATH} with the latest version from
+            https://github.com/ultralytics/ultralytics/blob/main/ultralytics/yolo/cfg/default.yaml
+            """)
+
+    def get(self, key, default=None):
+        """Return the value of the specified key if it exists; otherwise, return the default value."""
+        return getattr(self, key, default)
+
+
+def plt_settings(rcparams={'font.size': 11}, backend='Agg'):
+    """
+    Decorator to temporarily set rc parameters and the backend for a plotting function.
+
+    Usage:
+        decorator: @plt_settings({"font.size": 12})
+        context manager: with plt_settings({"font.size": 12}):
+
+    Args:
+        rcparams (dict): Dictionary of rc parameters to set.
+        backend (str, optional): Name of the backend to use. Defaults to 'Agg'.
+
+    Returns:
+        callable: Decorated function with temporarily set rc parameters and backend.
+    """
+
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            original_backend = plt.get_backend()
+            plt.switch_backend(backend)
+
+            with plt.rc_context(rcparams):
+                result = func(*args, **kwargs)
+
+            plt.switch_backend(original_backend)
+            return result
+
+        return wrapper
+
+    return decorator
 
 
 def set_logging(name=LOGGING_NAME, verbose=True):
     # sets up logging for the given name
     rank = int(os.getenv('RANK', -1))  # rank in world for Multi-GPU trainings
-    level = logging.INFO if verbose and rank in (-1, 0) else logging.ERROR
+    level = logging.INFO if verbose and rank in {-1, 0} else logging.ERROR
     logging.config.dictConfig({
         'version': 1,
         'disable_existing_loggers': False,
@@ -50,21 +157,34 @@ def set_logging(name=LOGGING_NAME, verbose=True):
                 'propagate': False}}})
 
 
+class EmojiFilter(logging.Filter):
+    """
+    A custom logging filter class for removing emojis in log messages.
+
+    This filter is particularly useful for ensuring compatibility with Windows terminals
+    that may not support the display of emojis in log messages.
+    """
+
+    def filter(self, record):
+        record.msg = emojis(record.msg)
+        return super().filter(record)
+
+
 # Set logger
 set_logging(LOGGING_NAME, verbose=VERBOSE)  # run before defining LOGGER
 LOGGER = logging.getLogger(LOGGING_NAME)  # define globally (used in train.py, val.py, detect.py, etc.)
 if WINDOWS:  # emoji-safe logging
-    info_fn, warning_fn = LOGGER.info, LOGGER.warning
-    setattr(LOGGER, info_fn.__name__, lambda x: info_fn(emojis(x)))
-    setattr(LOGGER, warning_fn.__name__, lambda x: warning_fn(emojis(x)))
+    LOGGER.addFilter(EmojiFilter())
 
 
 def yaml_save(file='data.yaml', data=None):
     """
     Save YAML data to a file.
+
     Args:
         file (str, optional): File name. Default is 'data.yaml'.
         data (dict, optional): Data to save in YAML format. Default is None.
+
     Returns:
         None: Data is saved to the specified file.
     """
@@ -85,9 +205,11 @@ def yaml_save(file='data.yaml', data=None):
 def yaml_load(file='data.yaml', append_filename=False):
     """
     Load YAML data from a file.
+
     Args:
         file (str, optional): File name. Default is 'data.yaml'.
         append_filename (bool): Add the YAML filename to the YAML dictionary. Default is False.
+
     Returns:
         dict: YAML data and file name.
     """
@@ -185,3 +307,43 @@ def bool_flag(s):
         return True
     else:
         raise argparse.ArgumentTypeError("invalid value for a boolean flag")
+
+
+def print_options(opt):
+    message = ''
+    message += '----------------- Options ---------------\n'
+    for k, v in sorted(vars(opt).items()):
+        comment = ''
+        message += '{:>25}: {:<30}{}\n'.format(str(k), str(v), comment)
+    message += '----------------- End -------------------'
+    LOGGER.info(message)
+
+
+def average_classification_reports(reports):
+    # 初始化一個字典來儲存平均值
+    averages = {}
+
+    # 計算每個標籤的 metric 值總和
+    for report in reports:
+        for label, metrics in report.items():
+            # init dict
+            if label not in averages and isinstance(metrics, dict):
+                averages[label] = {metric: 0 for metric in metrics}
+            elif label not in averages and isinstance(metrics, float):
+                averages[label] = 0
+
+            if isinstance(metrics, dict):
+                for metric, value in metrics.items():
+                    averages[label][metric] += value
+            elif isinstance(metrics, float):
+                averages[label] += metrics
+
+    # 計算平均值
+    num_reports = len(reports)
+    for label, metrics in averages.items():
+        if isinstance(metrics, dict):
+            for metric, value in metrics.items():
+                averages[label][metric] = value / num_reports
+        elif isinstance(metrics, float):
+            averages[label] /= num_reports
+    return averages
