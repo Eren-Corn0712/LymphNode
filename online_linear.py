@@ -62,10 +62,10 @@ def run(
     else:
         raise ValueError(f"We not implemented {args.arch}")
 
-    model.cuda()
+    device = get_model_device(model)
     model.eval()
 
-    linear_classifier = linear_classifier.cuda()
+    linear_classifier = linear_classifier.to(device=device)
 
     # set optimizer
     optimizer = torch.optim.SGD(
@@ -159,7 +159,7 @@ def train(model, linear_classifier, optimizer, loader, epoch, n, depths):
 
     device = get_model_device(model)
 
-    metric_logger = MetricLogger(delimiter="  ")
+    metric_logger = MetricLogger(delimiter=" ")
     metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     for batch in metric_logger.log_every(loader, 20, header):
@@ -204,7 +204,7 @@ def validate_network(val_loader, model, linear_classifier, n, depths):
 
     device = get_model_device(model)
 
-    metric_logger = MetricLogger(delimiter="  ")
+    metric_logger = MetricLogger(delimiter=" ")
     header = 'Test:'
     targets, predicts = [], []
     for batch in metric_logger.log_every(val_loader, 20, header):
