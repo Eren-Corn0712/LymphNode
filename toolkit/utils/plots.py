@@ -20,7 +20,8 @@ def show(imgs, save_dir=None, fname=None):
 
     if save_dir is not None:
         fig.savefig(save_dir / f'{fname}.png', dpi=200)
-
+    else:
+        plt.show()
     plt.close()
 
 

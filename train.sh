@@ -1,5 +1,5 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 
 # shellcheck disable=SC2054
 MODELS=resnet18
@@ -8,8 +8,8 @@ DIM=4096
 python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvit_lymph.py \
   --arch $MODELS \
   --data_path dataset leaf_tumor_video \
-  --save_dir runs/2023-04-24-w-dense-w-attn/$MODELS/$DIM \
-  --batch_size_per_gpu 256 \
+  --save_dir runs/2023-04-27-w-dense-w-attn-new_aug/$MODELS/$DIM \
+  --batch_size_per_gpu 128 \
   --momentum_teacher 0.9995 \
   --use_bn_in_head True \
   --epochs 300 \
@@ -21,9 +21,10 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvi
   --norm_last_layer True \
   --out_dim $DIM \
   --aug-opt lymph_node_aug \
-  --global_crops_scale 0.50 1.0 \
+  --global_crops_scale 0.95 1.0 \
+  --local_crops_scale 0.50 0.75 \
   --local_crops_number 8 \
-  --local_crops_scale 0.25 0.75 \
+  --global_crops_size 224 \
   --local_crops_size 96 \
   --num_workers 12 \
   --lr 5e-5 \
@@ -35,8 +36,8 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvi
 python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvit_lymph.py \
   --arch $MODELS \
   --data_path dataset leaf_tumor_video \
-  --save_dir runs/2023-04-24-w-dense-wo-attn/$MODELS/$DIM \
-  --batch_size_per_gpu 256 \
+  --save_dir runs/2023-04-27-w-dense-wo-attn-new_aug/$MODELS/$DIM \
+  --batch_size_per_gpu 128 \
   --momentum_teacher 0.9995 \
   --use_bn_in_head True \
   --epochs 300 \
@@ -48,9 +49,10 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvi
   --norm_last_layer True \
   --out_dim $DIM \
   --aug-opt lymph_node_aug \
-  --global_crops_scale 0.50 1.0 \
+  --global_crops_scale 0.95 1.0 \
+  --local_crops_scale 0.50 0.75 \
   --local_crops_number 8 \
-  --local_crops_scale 0.25 0.75 \
+  --global_crops_size 224 \
   --local_crops_size 96 \
   --num_workers 12 \
   --lr 5e-5 \
@@ -62,8 +64,8 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvi
 python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvit_lymph.py \
   --arch $MODELS \
   --data_path dataset leaf_tumor_video \
-  --save_dir runs/2023-04-24-wo-dense-w-attn/$MODELS/$DIM \
-  --batch_size_per_gpu 256 \
+  --save_dir runs/2023-04-27-wo-dense-w-attn-new_aug/$MODELS/$DIM \
+  --batch_size_per_gpu 128 \
   --momentum_teacher 0.9995 \
   --use_bn_in_head True \
   --epochs 300 \
@@ -75,9 +77,10 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvi
   --norm_last_layer True \
   --out_dim $DIM \
   --aug-opt lymph_node_aug \
-  --global_crops_scale 0.50 1.0 \
+  --global_crops_scale 0.95 1.0 \
+  --local_crops_scale 0.50 0.75 \
   --local_crops_number 8 \
-  --local_crops_scale 0.25 0.75 \
+  --global_crops_size 224 \
   --local_crops_size 96 \
   --num_workers 12 \
   --lr 5e-5 \
@@ -89,8 +92,8 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvi
 python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvit_lymph.py \
   --arch $MODELS \
   --data_path dataset leaf_tumor_video \
-  --save_dir runs/2023-04-24-wo-dense-wo-attn/$MODELS/$DIM \
-  --batch_size_per_gpu 256 \
+  --save_dir runs/2023-04-27-wo-dense-wo-attn-new_aug/$MODELS/$DIM \
+  --batch_size_per_gpu 128 \
   --momentum_teacher 0.9995 \
   --use_bn_in_head True \
   --epochs 300 \
@@ -102,9 +105,10 @@ python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvi
   --norm_last_layer True \
   --out_dim $DIM \
   --aug-opt lymph_node_aug \
-  --global_crops_scale 0.50 1.0 \
+  --global_crops_scale 0.95 1.0 \
+  --local_crops_scale 0.50 0.75 \
   --local_crops_number 8 \
-  --local_crops_scale 0.25 0.75 \
+  --global_crops_size 224 \
   --local_crops_size 96 \
   --num_workers 12 \
   --lr 5e-5 \

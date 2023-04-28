@@ -103,7 +103,7 @@ def get_args_parser():
         with the batch size, and specified here for a reference batch size of 256.""")
     parser.add_argument("--warmup_epochs", default=10, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
-    parser.add_argument('--min_lr', type=float, default=1e-6, help="""Target LR at the
+    parser.add_argument('--min_lr', type=float, default=1e-12, help="""Target LR at the
         end of optimization. We use a cosine LR schedule with linear warmup.""")
     parser.add_argument('--optimizer', default='adamw', type=str,
                         choices=['adamw', 'sgd', 'lars'],
@@ -114,13 +114,16 @@ def get_args_parser():
                         help="""Scale range of the cropped image before resizing, relatively to the origin image.
         Used for large global view cropping. When disabling multi-crop (--local_crops_number 0), we
         recommand using a wider range of scale ("--global_crops_scale 0.14 1." for example)""")
-    parser.add_argument('--local_crops_number', type=int, nargs='+', default=(8,), help="""Number of small
-        local views to generate. Set this parameter to 0 to disable multi-crop training.
-        When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1." """)
     parser.add_argument('--local_crops_scale', type=float, nargs='+', default=(0.05, 0.4),
                         help="""Scale range of the cropped image before resizing, relatively to the origin image.
-        Used for small local view cropping of multi-crop.""")
-    parser.add_argument('--local_crops_size', type=int, nargs='+', default=(96,), help="""Crop region size of local views to generate.
+                        Used for small local view cropping of multi-crop.""")
+    parser.add_argument('--local_crops_number', type=int, default=8,
+                        help="""Number of small local views to generate. 
+                        Set this parameter to 0 to disable multi-crop training. 
+                        When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1. """)
+
+    parser.add_argument('--global_crops_size', type=int, default=224)
+    parser.add_argument('--local_crops_size', type=int, default=96, help="""Crop region size of local views to generate.
         When disabling multi-crop we recommend to use "--local_crops_size 96." """)
 
     # Augmentation parameters
@@ -292,7 +295,8 @@ def train_esvit(args):
                 teacher=teacher,
                 criterion=criterion,
                 data_loader=data_loader,
-                optimizer=optimizer, lr_schedule=lr_schedule,
+                optimizer=optimizer,
+                lr_schedule=lr_schedule,
                 wd_schedule=wd_schedule,
                 momentum_schedule=momentum_schedule,
                 epoch=epoch,
@@ -326,7 +330,7 @@ def train_esvit(args):
 
             for key in log_stats:
                 if isinstance(log_stats[key], float):
-                    log_stats[key] = round(log_stats[key], 4)
+                    log_stats[key] = "{:.6f}".format(round(log_stats[key], 6))
 
             if is_main_process():
                 with (Path(args.fold_save_dir / "log.txt")).open("a") as f:

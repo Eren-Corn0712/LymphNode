@@ -8,6 +8,9 @@ from torchvision.transforms.functional import InterpolationMode
 from typing import Tuple
 from PIL import ImageOps, Image
 
+from toolkit.data.mutli_transform import (DataAugmentationLymphNode,
+                                          AlbumentationsLymphNode)
+from toolkit.utils import LOGGER
 
 class ResizePadding(object):
     def __init__(self, size):
@@ -25,34 +28,6 @@ class ResizePadding(object):
         new_im.paste(im, ((self.size - new_size[0]) // 2,
                           (self.size - new_size[1]) // 2))
         return new_im
-
-
-class Posterize(object):
-    """
-    Apply Posterize to the PIL image.
-    """
-
-    def __init__(self, p):
-        self.p = p
-
-    def __call__(self, img):
-        if random.random() <= self.p:
-            return ImageOps.posterize(img, random.randint(4, 8))
-        return img
-
-
-class Equalize(object):
-    """
-    Apply autocontrast to the PIL image.
-    """
-
-    def __init__(self, p):
-        self.p = p
-
-    def __call__(self, img):
-        if random.random() <= self.p:
-            return ImageOps.equalize(img)
-        return img
 
 
 class GaussianBlur(transforms.RandomApply):
@@ -82,66 +57,64 @@ class Solarization(object):
             return img
 
 
-
-
-class DataAugmentationLymphNode(object):
-    def __init__(self, global_crops_scale, local_crops_scale, local_crops_number, local_crops_size=96):
-        normalize = transforms.Compose([
-            transforms.Grayscale(num_output_channels=3),
-            transforms.ToTensor(),
-        ])
-
-        flip_and_color_jitter = transforms.Compose([
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomVerticalFlip(0.5),
-            transforms.RandomApply(
-                [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0., hue=0.)],
-                p=0.8
-            )
-        ])
-
-        self.global_transfo1 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale,
-                                         interpolation=transforms.InterpolationMode.BICUBIC),
-            flip_and_color_jitter,
-            GaussianBlur(p=1.0),
-            normalize,
-        ])
-        self.global_transfo2 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale,
-                                         interpolation=transforms.InterpolationMode.BICUBIC),
-            flip_and_color_jitter,
-            GaussianBlur(p=0.1),
-            Solarization(0.2),
-            normalize,
-        ])
-
-        # transformation for the local small crops
-        if not isinstance(local_crops_size, tuple) or not isinstance(local_crops_size, list):
-            local_crops_size = list(local_crops_size)
-
-        if not isinstance(local_crops_number, tuple) or not isinstance(local_crops_number, list):
-            local_crops_number = list(local_crops_number)
-
-        self.local_crops_number = local_crops_number
-
-        self.local_transfo = []
-
-        for idx, l_size in enumerate(local_crops_size):
-            self.local_transfo.append(transforms.Compose([
-                transforms.RandomResizedCrop(l_size, scale=local_crops_scale, interpolation=Image.BICUBIC),
-                flip_and_color_jitter,
-                GaussianBlur(p=0.5),
-                normalize,
-            ]))
-
-    def __call__(self, image):
-        crops = [self.global_transfo1(image), self.global_transfo2(image)]
-        for i, n_crop in enumerate(self.local_crops_number):
-            for _ in range(n_crop):
-                crops.append(self.local_transfo[i](image))
-
-        return crops
+# class DataAugmentationLymphNode(object):
+#     def __init__(self, global_crops_scale, local_crops_scale, local_crops_number, local_crops_size=96):
+#         normalize = transforms.Compose([
+#             transforms.Grayscale(num_output_channels=3),
+#             transforms.ToTensor(),
+#         ])
+#
+#         flip_and_color_jitter = transforms.Compose([
+#             transforms.RandomHorizontalFlip(p=0.5),
+#             transforms.RandomVerticalFlip(0.5),
+#             transforms.RandomApply(
+#                 [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0., hue=0.)],
+#                 p=0.8
+#             )
+#         ])
+#
+#         self.global_transfo1 = transforms.Compose([
+#             transforms.RandomResizedCrop(224, scale=global_crops_scale,
+#                                          interpolation=transforms.InterpolationMode.BICUBIC),
+#             flip_and_color_jitter,
+#             GaussianBlur(p=1.0),
+#             normalize,
+#         ])
+#         self.global_transfo2 = transforms.Compose([
+#             transforms.RandomResizedCrop(224, scale=global_crops_scale,
+#                                          interpolation=transforms.InterpolationMode.BICUBIC),
+#             flip_and_color_jitter,
+#             GaussianBlur(p=0.1),
+#             Solarization(0.2),
+#             normalize,
+#         ])
+#
+#         # transformation for the local small crops
+#         if not isinstance(local_crops_size, tuple) or not isinstance(local_crops_size, list):
+#             local_crops_size = list(local_crops_size)
+#
+#         if not isinstance(local_crops_number, tuple) or not isinstance(local_crops_number, list):
+#             local_crops_number = list(local_crops_number)
+#
+#         self.local_crops_number = local_crops_number
+#
+#         self.local_transfo = []
+#
+#         for idx, l_size in enumerate(local_crops_size):
+#             self.local_transfo.append(transforms.Compose([
+#                 transforms.RandomResizedCrop(l_size, scale=local_crops_scale, interpolation=Image.BICUBIC),
+#                 flip_and_color_jitter,
+#                 GaussianBlur(p=0.5),
+#                 normalize,
+#             ]))
+#
+#     def __call__(self, image):
+#         crops = [self.global_transfo1(image), self.global_transfo2(image)]
+#         for i, n_crop in enumerate(self.local_crops_number):
+#             for _ in range(n_crop):
+#                 crops.append(self.local_transfo[i](image))
+#
+#         return crops
 
 
 class DataAugmentationLymphNodeOverlapping(object):
@@ -386,7 +359,7 @@ class RandomCutmix(torch.nn.Module):
         return s
 
 
-class ClassificationPresetTrain:
+class ClassificationPresetTrain(object):
     def __init__(
             self,
             *,
@@ -430,7 +403,7 @@ class ClassificationPresetTrain:
         return self.transforms(img)
 
 
-class ClassificationPresetEval:
+class ClassificationPresetEval(object):
     def __init__(
             self,
             *,
@@ -459,17 +432,11 @@ class ClassificationPresetEval:
 def create_transform(args, name):
     if name == "lymph_node_aug":
         transform = DataAugmentationLymphNode(
-            args.global_crops_scale,
-            args.local_crops_scale,
-            args.local_crops_number,
-            args.local_crops_size)
-    elif name == "lymph_node_aug_overlapping":
-        transform = DataAugmentationLymphNodeOverlapping(
-            args.global_crops_scale,
-            args.local_crops_scale,
-            args.local_crops_number,
-            args.local_crops_size
-        )
+            global_crops_scale=args.global_crops_scale,
+            local_crops_scale=args.local_crops_scale,
+            local_crops_number=args.local_crops_number,
+            global_crops_size=args.global_crops_size,
+            local_crops_size=args.local_crops_size)
 
     elif name == "eval_train":
         transform = transforms.Compose([
@@ -508,4 +475,5 @@ def create_transform(args, name):
     else:
         raise ValueError(f"Not support for {name}")
 
+    LOGGER.info(f"Data Augmentation: {transform.__class__.__name__}")
     return transform

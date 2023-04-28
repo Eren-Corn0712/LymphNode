@@ -101,6 +101,10 @@ def run(
 
         LOGGER.info(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
 
+        for key in log_stats:
+            if isinstance(log_stats[key], float):
+                log_stats[key] = "{:.6f}".format(round(log_stats[key], 6))
+
         if is_main_process():
             with (Path(save_dir) / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")

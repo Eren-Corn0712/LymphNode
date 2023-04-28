@@ -275,7 +275,7 @@ def build_loss(args, device) -> Dict:
         # Both view and region level tasks are considered
         criterion["ddino_loss"] = DDINOLoss(
             args.out_dim,
-            sum(args.local_crops_number) + 2,  # total number of crops = 2 global crops + local_crops_number
+            args.local_crops_number + 2,  # total number of crops = 2 global crops + local_crops_number
             args.warmup_teacher_temp,
             args.teacher_temp,
             args.warmup_teacher_temp_epochs,
@@ -285,7 +285,7 @@ def build_loss(args, device) -> Dict:
         # Only view level task is considered
         criterion["dino_loss"] = DINOLoss(
             args.out_dim,
-            sum(args.local_crops_number) + 2,  # total number of crops = 2 global crops + local_crops_number
+            args.local_crops_number + 2,  # total number of crops = 2 global crops + local_crops_number
             args.warmup_teacher_temp,
             args.teacher_temp,
             args.warmup_teacher_temp_epochs,
@@ -295,7 +295,7 @@ def build_loss(args, device) -> Dict:
     if args.use_attention_head:
         criterion["attn_loss"] = CARELoss(
             args.out_dim,
-            sum(args.local_crops_number) + 2,  # total number of crops = 2 global crops + local_crops_number
+            args.local_crops_number + 2,  # total number of crops = 2 global crops + local_crops_number
             args.warmup_teacher_temp,
             args.teacher_temp,
             args.warmup_teacher_temp_epochs,

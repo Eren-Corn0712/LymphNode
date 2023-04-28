@@ -87,7 +87,7 @@ def init_distributed_mode(args):
     args.distributed = True
 
     torch.cuda.set_device(args.gpu)
-    LOGGER.info(f"| distributed init (rank {args.rank}): {args.dist_url}", flush=True)
+    LOGGER.info(f"| distributed init (rank {args.rank}): {args.dist_url}")
     torch.distributed.init_process_group(
         backend='nccl' if dist.is_nccl_available() else 'gloo',
         init_method=args.dist_url,
