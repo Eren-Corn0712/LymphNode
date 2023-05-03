@@ -53,10 +53,10 @@ def build_dataloader(args, backbone_dataset, train_dataset, test_dataset):
     return backbone_data_loader, train_loader, test_loader
 
 
-def create_loader(args, dataset, sampler):
+def create_loader(args, batch_size, dataset, sampler):
     return DataLoader(
         dataset=dataset,
-        batch_size=args.batch_size_per_gpu,
+        batch_size=batch_size,
         num_workers=args.num_workers,
         pin_memory=True,
         sampler=sampler

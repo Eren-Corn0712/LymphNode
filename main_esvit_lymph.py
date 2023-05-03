@@ -40,7 +40,7 @@ from toolkit.utils.loss import build_loss
 from toolkit.utils.plots import show
 from toolkit.models import create_teacher_student
 from toolkit.data.augmentations import create_transform
-
+from toolkit.utils.plots import plot_txt
 from online_linear import run
 
 from pathlib import Path
@@ -157,7 +157,7 @@ def get_args_parser():
 
     # Linear Parser
     parser.add_argument('--linear_lr', type=float, default=0.01)
-    parser.add_argument('--linear_epochs', type=int, default=150)
+    parser.add_argument('--linear_epochs', type=int, default=1)
 
     return parser
 
@@ -184,27 +184,21 @@ def train_esvit(args):
 
         # transformation for backbone, train linear, test linear
         backbone_dataset = deepcopy(train_set)  # For DINO Backbone training
-
         backbone_dataset.transform = create_transform(args, args.aug_opt)
-        train_set.transform = create_transform(args, "eval_train")
-        test_set.transform = create_transform(args, "eval_test")
 
         # create sampler
         train_sampler, test_sampler = creat_sampler(args=args, train_dataset=train_set, test_dataset=test_set)
 
-        data_loader = create_loader(args, backbone_dataset, sampler=train_sampler)
-        train_loader = create_loader(args, train_set, sampler=train_sampler)
-        val_loader = create_loader(args, test_set, sampler=test_sampler)
+        data_loader = create_loader(args, args.batch_size_per_gpu, backbone_dataset, sampler=train_sampler)
 
         LOGGER.info(f"Backbone loaded : {len(backbone_dataset)} images.")
         LOGGER.info(f"Train loaded : {len(train_set)} images.")
         LOGGER.info(f"Val loaded : {len(test_set)} images.")
 
         # ============ Plotting Training val images ... ============
-        show(next(iter(backbone_dataset))['img'][:2], save_dir=args.fold_save_dir, name="global_view")
-        show(next(iter(backbone_dataset))['img'][2:], save_dir=args.fold_save_dir, name="local_view")
-        show(next(iter(train_set))['img'], save_dir=args.fold_save_dir, name="train")
-        show(next(iter(test_set))['img'], save_dir=args.fold_save_dir, name="test")
+        if is_main_process():
+            show(next(iter(backbone_dataset))['img'][:2], save_dir=args.fold_save_dir, name="global_view")
+            show(next(iter(backbone_dataset))['img'][2:], save_dir=args.fold_save_dir, name="local_view")
 
         # ============ building student and teacher networks ... ============
         teacher, student = create_teacher_student(args)
@@ -293,6 +287,7 @@ def train_esvit(args):
 
         lowest_loss = sys.float_info.max
         best_w, last_w = args.fold_save_dir / f'best.pth', args.fold_save_dir / f'last.pth'
+        txt_file = args.fold_save_dir / "log.txt"
         for epoch in range(start_epoch, args.epochs):
             if args.distributed:
                 data_loader.sampler.set_epoch(epoch)
@@ -340,7 +335,7 @@ def train_esvit(args):
                     log_stats[key] = "{:.6f}".format(round(log_stats[key], 6))
 
             if is_main_process():
-                with (Path(args.fold_save_dir / "log.txt")).open("a") as f:
+                with txt_file.open("a") as f:
                     f.write(json.dumps(log_stats) + "\n")
 
             # features, labels = get_features(val_loader,
@@ -354,7 +349,21 @@ def train_esvit(args):
             # tsne_video(fold_output_dir, fold_output_dir)
             # del tsne, features, labels, save_dict, train_stats, log_stats,
 
+        # Plot loss
+        if is_main_process():
+            plot_txt(txt_file, keyword="loss", save_dir=args.fold_save_dir, name="result")
+
         # ============ Linear evaluation ============
+        # ============ Prepare dataloader and dataset transform ============
+        train_set.transform = create_transform(args, "eval_train")
+        test_set.transform = create_transform(args, "eval_test")
+        train_loader = create_loader(args, args.batch_size_per_gpu * 4, train_set, sampler=train_sampler)
+        val_loader = create_loader(args, args.batch_size_per_gpu * 4, test_set, sampler=test_sampler)
+
+        # plot image
+        if is_main_process():
+            show(next(iter(train_set))['img'], save_dir=args.fold_save_dir, name="train")
+            show(next(iter(test_set))['img'], save_dir=args.fold_save_dir, name="test")
 
         load_pretrained_weights(
             model=de_parallel(teacher),
@@ -362,8 +371,7 @@ def train_esvit(args):
             checkpoint_key="teacher"
         )
         # Two times learning rate
-        train_loader.batch_size = train_loader.batch_size * 2
-        val_loader.batch_size = val_loader.batch_size * 2
+
         # Run the best pt.file
         best_result = run(
             train_loader=train_loader,

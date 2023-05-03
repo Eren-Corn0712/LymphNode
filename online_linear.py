@@ -21,6 +21,7 @@ from toolkit.utils.torch_utils import de_parallel, time_sync, accuracy, detach_t
 from toolkit.utils.dist_utils import save_on_master, is_main_process, get_world_size
 from toolkit.utils.python_utils import merge_dict_with_prefix
 from toolkit.utils.logger import (MetricLogger, SmoothedValue)
+from toolkit.utils.plots import plot_txt
 
 
 def run(
@@ -87,6 +88,7 @@ def run(
 
     # last, best ckpt path
     last_w, best_w = (save_dir / "last.pth", save_dir / "best.pth")
+    txt_file = save_dir / "log.txt"
     for epoch in range(0, epochs + 1):
         if args.distributed:
             train_loader.sampler.set_epoch(epoch)
@@ -114,6 +116,7 @@ def run(
 
         exclude = ("targets", "predicts")
         log_stats = merge_dict_with_prefix(log_stats, test_stats, "test_", exclude=exclude)
+        log_stats['epoch'] = epoch
 
         LOGGER.info(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
 
@@ -122,7 +125,7 @@ def run(
                 log_stats[key] = "{:.6f}".format(round(log_stats[key], 6))
 
         if is_main_process():
-            with (Path(save_dir) / "log.txt").open("a") as f:
+            with txt_file.open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
         save_dict = {
@@ -136,9 +139,8 @@ def run(
 
         save_on_master(save_dict, last_w)
 
-        f1 = f1_score(test_stats['targets'], test_stats['predicts'], average='weighted')
-
         if is_main_process():
+            f1 = f1_score(test_stats['targets'], test_stats['predicts'], average='weighted')
             if f1 > best_f1:
                 name = train_loader.dataset.classes
                 best_acc, best_f1 = test_stats["acc1"], f1
@@ -168,6 +170,10 @@ def run(
                 plt.close()
 
         del save_dict
+
+    # Plot loss
+    if is_main_process():
+        plot_txt(txt_file, keyword="acc", save_dir=save_dir, name="result")
 
     LOGGER.info("Training of the supervised linear classifier on frozen features completed.\n"
                 "Top-1 test accuracy: {acc:.1f}".format(acc=best_acc))

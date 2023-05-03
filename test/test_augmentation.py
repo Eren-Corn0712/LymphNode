@@ -10,8 +10,9 @@ class TestClass(object):
         pass
 
     def test_data_augmentation_lymph_node(self):
-        transform = DataAugmentationLymphNode(global_crops_scale=(0.14, 1.0),
-                                              local_crops_scale=(0.05, 0.14),
+        s = 0.75
+        transform = DataAugmentationLymphNode(global_crops_scale=(s, 1.0),
+                                              local_crops_scale=(0.05, s),
                                               local_crops_number=8,
                                               global_crops_size=224,
                                               local_crops_size=96)

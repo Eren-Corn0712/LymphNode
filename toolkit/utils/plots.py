@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import json
 import torchvision
 import torchvision.transforms.functional
 
@@ -19,6 +20,30 @@ def show(imgs, save_dir=Path(''), name=None):
         axs[0, i].imshow(np.asarray(img))
         axs[0, i].set(xticklabels=[], yticklabels=[], xticks=[], yticks=[])
 
+    plt.savefig(save_dir / f'{"show" if name is None else name}.png', dpi=200)
+    plt.close()
+
+
+def plot_txt(file_path, keyword, save_dir=Path(''), name=None):
+    with open(file_path) as f:
+        first_line = f.readline().strip()
+        first_dict = json.loads(first_line)
+
+        keys = [key for key in first_dict if keyword in key]
+
+        data = [first_dict] + [json.loads(line) for line in f]
+
+    epochs = [d['epoch'] for d in data]
+
+    for key in keys:
+        values = [float(d[key]) for d in data]
+
+        plt.plot(epochs, values, label=key.capitalize())
+
+    plt.xlabel('Epoch')
+    plt.ylabel(keyword.capitalize())
+    plt.title(f'{keyword.capitalize()} Curves')
+    plt.legend()
     plt.savefig(save_dir / f'{"show" if name is None else name}.png', dpi=200)
     plt.close()
 

@@ -22,41 +22,46 @@ class SwinTransformerWrapper(SwinTransformer):
         if not isinstance(x, list):
             x = [x]
 
-        idx_crops = torch.cumsum(torch.unique_consecutive(
-            torch.tensor([inp.shape[-1] for inp in x]),
-            return_counts=True,
-        )[1], 0)
+        view_sizes = [inp.shape[-1] for inp in x]
+        unique_sizes_count = torch.tensor(view_sizes).unique_consecutive(return_counts=True)[1]
+        idx_crops = unique_sizes_count.cumsum(0)
 
-        if self.use_dense_prediction:
-            output_cls, output_fea, n_patch = None, None, []
-            start_idx = 0
+        output = {}
+        output_cls, output_fea, num_patch = [], [], []
+        attn_head = []
+        # Multi view forward
+        for start_idx, end_idx in zip([0] + idx_crops[:-1].tolist(), idx_crops.tolist()):
+            out_cls, out_fea = self.forward_features(torch.cat(x[start_idx: end_idx]))
 
-            for end_idx in idx_crops:
-                _out_cls, _out_fea = self.forward_features(torch.cat(x[start_idx: end_idx]))
-                B, N, C = _out_fea.shape
+            # Concatenate the features across patches
+            batch_size, num_fea, channel = out_fea.shape
+            output_cls.append(out_cls)
+            output_fea.append(out_fea.reshape(batch_size * num_fea, channel))
 
-                if start_idx == 0:
-                    output_cls = _out_cls
-                    output_fea = _out_fea.reshape(B * N, C)
-                    n_patch = [N]
-                else:
-                    output_cls = torch.cat((output_cls, _out_cls))
-                    output_fea = torch.cat((output_fea, _out_fea.reshape(B * N, C)))
-                    n_patch.append(N)
-                start_idx = end_idx
+            # Only forward global view
+            if hasattr(self, "attn_head") and num_fea == (224 // 32) ** 2:
+                attn_head.append(getattr(self, "attn_head")(out_fea))
 
-            return self.head(output_cls), self.head_dense(output_fea), output_fea, n_patch
-        else:
-            start_idx = 0
-            for end_idx in idx_crops:
-                _out = self.forward_features(torch.cat(x[start_idx: end_idx]))
-                if start_idx == 0:
-                    output = _out
-                else:
-                    output = torch.cat((output, _out))
-                start_idx = end_idx
-            # Run the head forward on the concatenated features.
-            return self.head(output)
+            # Record batch size
+            num_patch.append(num_fea)
+            del out_cls, out_fea
+
+        if hasattr(self, "head") and output_cls:
+            output_cls = torch.cat(output_cls)
+            output["head"] = getattr(self, 'head')(output_cls)
+
+        if hasattr(self, "dense_head") and output_fea:
+            output_fea = torch.cat(output_fea)
+            output["dense_head"] = getattr(self, 'dense_head')(output_fea)
+            output["output_fea"] = output_fea
+
+        if hasattr(self, "attn_head"):
+            attn_head = torch.cat(attn_head)
+            output["attn_head"] = attn_head
+
+        output["num_patch"] = num_patch
+
+        return output
 
     def forward_features(self, x):
         x = self.features(x)
@@ -106,6 +111,7 @@ def swin_custom(*args, **kwargs):
         depths=[2, 2, 2, 2],
         num_heads=[1, 2, 4, 8],
         window_size=[14, 14],
+        mlp_ratio=1.0,
         stochastic_depth_prob=0.0 if kwargs.get('is_teacher', False) else 0.2,
     )
     return SwinTransformerWrapper("swin_custom", **params)
