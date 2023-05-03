@@ -31,6 +31,14 @@ class LymphBaseDataset(Dataset, ABC):
 
         self.prefix = prefix
 
+    def info(self):
+        count_dict_label = {}
+        for l in self.labels:
+            count_dict_label.setdefault(l['type_name'], 0)
+            count_dict_label[l['type_name']] += 1
+
+        print(count_dict_label)
+
     def get_labels(self, img_path):
         try:
             x = []

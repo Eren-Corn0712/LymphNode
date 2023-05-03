@@ -85,7 +85,7 @@ class ResnetWrapper(ResNet):
         x = self.layer4(x)
         return x
 
-    def forward_return_n_last_blocks(self, x, n=1, depths=[]):
+    def forward_return_n_last_blocks(self, x, n, depths):
         output = []
         all_depths = sum(depths)
         block_idx = all_depths - n

@@ -1,5 +1,4 @@
 import argparse
-import datetime
 import math
 
 import time
@@ -12,17 +11,26 @@ import numpy as np
 
 import torch.backends.cuda
 
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.cuda import amp
 from toolkit.data.lymph_dataset import KFoldLymphDataset
+from toolkit.data.bulid_dataloader import create_loader
 
-from toolkit.utils import (yaml_save, bool_flag, average_classification_reports, print_options,
-                           LOGGER)
-from toolkit.utils.torch_utils import (init_seeds, de_parallel, has_batchnorms, cosine_scheduler,
-                                       time_sync, load_pretrained_weights,
-                                       restart_from_checkpoint, get_model_device,
-                                       model_info, build_optimizer)
+from toolkit.utils import (
+    yaml_save, bool_flag, average_classification_reports,
+    print_options, LOGGER, TQDM_BAR_FORMAT
+)
+from toolkit.utils.torch_utils import (
+    init_seeds, de_parallel, has_batchnorms, cosine_scheduler,
+    time_sync, load_pretrained_weights,
+    restart_from_checkpoint, get_model_device,
+    model_info, build_optimizer
+)
 
-from toolkit.utils.dist_utils import (init_distributed_mode, is_main_process,
-                                      get_world_size, save_on_master)
+from toolkit.utils.dist_utils import (
+    init_distributed_mode, is_main_process,
+    get_world_size, save_on_master
+)
 
 from toolkit.data.sampler import creat_sampler
 
@@ -30,9 +38,6 @@ from toolkit.utils.python_utils import merge_dict_with_prefix
 from toolkit.utils.logger import MetricLogger
 from toolkit.utils.loss import build_loss
 from toolkit.utils.plots import show
-from torchvision.utils import make_grid
-
-from toolkit.data.bulid_dataloader import create_loader
 from toolkit.models import create_teacher_student
 from toolkit.data.augmentations import create_transform
 
@@ -48,12 +53,7 @@ def get_args_parser():
     # Model parameters
     parser.add_argument('--arch', default='resnet18', type=str,
                         help="""Name of architecture to train. For quick experiments with ViTs,
-        we recommend using deit_tiny or deit_small.""")
-    parser.add_argument('--patch_size', default=16, type=int, help="""Size in pixels
-        of input square patches - default 16 (for 16x16 patches). Using smaller
-        values leads to better performance but requires more memory. Applies only
-        for ViTs (deit_tiny, deit_small and vit_base). If <16, we recommend disabling
-        mixed precision training (--use_fp16 false) to avoid unstabilities.""")
+                         we recommend using deit_tiny or deit_small.""")
     parser.add_argument('--out_dim', default=1024, type=int, help="""Dimensionality of
         the DINO head output. For complex and large datasets large values (like 65k) work well.""")
     parser.add_argument('--norm_last_layer', default=True, type=bool_flag,
@@ -68,6 +68,10 @@ def get_args_parser():
 
     parser.add_argument('--use_dense_prediction', default=False, type=bool_flag,
                         help="Whether to use dense prediction in projection head (Default: False)")
+
+    # additional loss
+    parser.add_argument('--use_attention_head', default=False, type=bool_flag,
+                        help="Wheter to use the attention head.")
 
     # Temperature teacher parameters
     parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
@@ -92,7 +96,7 @@ def get_args_parser():
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
         gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
         help optimization for larger ViT architectures. 0 for disabling.""")
-    parser.add_argument('--batch_size_per_gpu', default=32, type=int,
+    parser.add_argument('--batch_size_per_gpu', default=64, type=int,
                         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
     parser.add_argument('--epochs', default=10, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
@@ -103,7 +107,7 @@ def get_args_parser():
         with the batch size, and specified here for a reference batch size of 256.""")
     parser.add_argument("--warmup_epochs", default=10, type=int,
                         help="Number of epochs for the linear learning-rate warm up.")
-    parser.add_argument('--min_lr', type=float, default=1e-12, help="""Target LR at the
+    parser.add_argument('--min_lr', type=float, default=1e-6, help="""Target LR at the
         end of optimization. We use a cosine LR schedule with linear warmup.""")
     parser.add_argument('--optimizer', default='adamw', type=str,
                         choices=['adamw', 'sgd', 'lars'],
@@ -114,29 +118,24 @@ def get_args_parser():
                         help="""Scale range of the cropped image before resizing, relatively to the origin image.
         Used for large global view cropping. When disabling multi-crop (--local_crops_number 0), we
         recommand using a wider range of scale ("--global_crops_scale 0.14 1." for example)""")
-    parser.add_argument('--local_crops_scale', type=float, nargs='+', default=(0.05, 0.4),
-                        help="""Scale range of the cropped image before resizing, relatively to the origin image.
-                        Used for small local view cropping of multi-crop.""")
     parser.add_argument('--local_crops_number', type=int, default=8,
                         help="""Number of small local views to generate. 
                         Set this parameter to 0 to disable multi-crop training. 
                         When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1. """)
+    parser.add_argument('--local_crops_scale', type=float, nargs='+', default=(0.05, 0.4),
+                        help="""Scale range of the cropped image before resizing, relatively to the origin image.
+                        Used for small local view cropping of multi-crop.""")
 
     parser.add_argument('--global_crops_size', type=int, default=224)
     parser.add_argument('--local_crops_size', type=int, default=96, help="""Crop region size of local views to generate.
         When disabling multi-crop we recommend to use "--local_crops_size 96." """)
 
     # Augmentation parameters
-    parser.add_argument('--aug-opt', type=str, default='lymph_node_aug', metavar='NAME',
+    parser.add_argument('--aug_opt', type=str, default='lymph_node_aug', metavar='NAME',
                         help='Use different data augmentation policy. [deit_aug, dino_aug, mocov2_aug, basic_aug] \
                              "(default: dino_aug)')
     parser.add_argument('--color-jitter', type=float, default=0.4, metavar='PCT',
                         help='Color jitter factor (default: 0.4)')
-
-    parser.add_argument('--train-interpolation', type=str, default='bicubic',
-                        help='Training interpolation (random, bilinear, bicubic default: "bicubic")')
-
-    parser.add_argument('--sampler', default="distributed", type=str, help='Sampler for dataloader.')
 
     # Misc
     parser.add_argument('--data_path', default=['dataset', 'leaf_tumor_video'], type=str,
@@ -151,22 +150,14 @@ def get_args_parser():
         distributed training; see https://pytorch.org/docs/stable/distributed.html""")
     parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
 
-    parser.add_argument('opts',
-                        help="Modify config options using the command-line",
-                        default=None,
-                        nargs=argparse.REMAINDER)
-
     parser.add_argument('--n_last_blocks', default=2, type=int, help="""Concatenate [CLS] tokens
         for the `n` last blocks. We use `n=4` when evaluating DeiT-Small and `n=1` with ViT-Base.""")
     parser.add_argument('--num_labels', default=2, type=int, help='number of classes in a dataset')
-    parser.add_argument('--val_freq', default=1, type=int, help="Epoch frequency for validation.")
     parser.add_argument('--device', default="cuda")
 
     # Linear Parser
-    parser.add_argument('--linear_lr', type=float, default=0.001)
-    parser.add_argument('--linear_epochs', type=int, default=1)
-    # additional loss
-    parser.add_argument('--use_attention_head', default=True, type=bool_flag)
+    parser.add_argument('--linear_lr', type=float, default=0.01)
+    parser.add_argument('--linear_epochs', type=int, default=150)
 
     return parser
 
@@ -205,18 +196,30 @@ def train_esvit(args):
         train_loader = create_loader(args, train_set, sampler=train_sampler)
         val_loader = create_loader(args, test_set, sampler=test_sampler)
 
+        LOGGER.info(f"Backbone loaded : {len(backbone_dataset)} images.")
+        LOGGER.info(f"Train loaded : {len(train_set)} images.")
+        LOGGER.info(f"Val loaded : {len(test_set)} images.")
+
+        # ============ Plotting Training val images ... ============
+        show(next(iter(backbone_dataset))['img'][:2], save_dir=args.fold_save_dir, name="global_view")
+        show(next(iter(backbone_dataset))['img'][2:], save_dir=args.fold_save_dir, name="local_view")
+        show(next(iter(train_set))['img'], save_dir=args.fold_save_dir, name="train")
+        show(next(iter(test_set))['img'], save_dir=args.fold_save_dir, name="test")
+
         # ============ building student and teacher networks ... ============
         teacher, student = create_teacher_student(args)
 
-        # Move Networks To GPU
+        # Move networks to GPU
         student, teacher = student.to(device), teacher.to(device)
 
         # synchronize batch norms (if any)
         if args.distributed:
-            for model in [student, teacher]:
-                if has_batchnorms(model):
-                    model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
-                model = nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+            if has_batchnorms(student):
+                student = nn.SyncBatchNorm.convert_sync_batchnorm(student)
+                teacher = nn.SyncBatchNorm.convert_sync_batchnorm(teacher)
+
+            student = DDP(student, device_ids=[args.gpu])
+            teacher = DDP(teacher, device_ids=[args.gpu])
 
         # teacher and student start with the same weights
         de_parallel(teacher).load_state_dict(de_parallel(student).state_dict())
@@ -235,23 +238,28 @@ def train_esvit(args):
         optimizer = build_optimizer(optimizer=args.optimizer, model=student)
 
         # for mixed precision training
-        scaler = torch.cuda.amp.GradScaler() if args.amp else None
+        scaler = amp.GradScaler() if args.amp else None
 
         # ============ init schedulers ... ============
         lr_schedule = cosine_scheduler(
-            args.lr * (args.batch_size_per_gpu * get_world_size()) / 256.,  # linear scaling rule
-            args.min_lr,
-            args.epochs, len(data_loader),
+            base_value=args.lr * (args.batch_size_per_gpu * get_world_size()) / 256.,  # linear scaling rule
+            final_value=args.min_lr,
+            epochs=args.epochs,
+            niter_per_ep=len(data_loader),
             warmup_epochs=args.warmup_epochs,
         )
         wd_schedule = cosine_scheduler(
-            args.weight_decay,
-            args.weight_decay_end,
-            args.epochs, len(data_loader),
+            base_value=args.weight_decay,
+            final_value=args.weight_decay_end,
+            epochs=args.epochs,
+            niter_per_ep=len(data_loader),
         )
         # momentum parameter is increased to 1. during training with a cosine schedule
-        momentum_schedule = cosine_scheduler(args.momentum_teacher, 1,
-                                             args.epochs, len(data_loader))
+        momentum_schedule = cosine_scheduler(
+            base_value=args.momentum_teacher,
+            final_value=1,
+            epochs=args.epochs,
+            niter_per_ep=len(data_loader))
 
         LOGGER.info(f"Loss, optimizer and schedulers ready.")
 
@@ -281,7 +289,6 @@ def train_esvit(args):
         )
         start_epoch = to_restore["epoch"]
 
-        start_time = time.time()
         LOGGER.info(f"Starting training of DINO! from epoch {start_epoch}")
 
         lowest_loss = sys.float_info.max
@@ -354,6 +361,9 @@ def train_esvit(args):
             pretrained_weights=best_w,
             checkpoint_key="teacher"
         )
+        # Two times learning rate
+        train_loader.batch_size = train_loader.batch_size * 2
+        val_loader.batch_size = val_loader.batch_size * 2
         # Run the best pt.file
         best_result = run(
             train_loader=train_loader,
@@ -385,6 +395,9 @@ def train_esvit(args):
         # save linear eval result
         best_results.append(best_result)
         last_results.append(last_result)
+
+        # save final yaml
+        yaml_save(args.fold_save_dir / 'args.yaml', data=vars(args))
 
     if is_main_process():
         best_average = average_classification_reports(best_results)
@@ -437,7 +450,8 @@ def train_one_epoch(
 
     metric_logger = MetricLogger(delimiter=" ", save_dir=None)
     header = 'Epoch:[{}/{}]'.format(epoch, args.epochs)
-    for it, batch in enumerate(metric_logger.log_every(data_loader, 10, header)):
+
+    for it, batch in enumerate(metric_logger.log_every(data_loader, 20, header)):
         # update weight decay and learning rate according to their schedule
         it = len(data_loader) * epoch + it  # global training iteration
         for i, param_group in enumerate(optimizer.param_groups):

@@ -10,21 +10,21 @@ class TestClass(object):
         pass
 
     def test_data_augmentation_lymph_node(self):
-        transform = DataAugmentationLymphNode(global_crops_scale=(0.95, 1.0),
-                                              local_crops_scale=(0.50, 0.75),
+        transform = DataAugmentationLymphNode(global_crops_scale=(0.14, 1.0),
+                                              local_crops_scale=(0.05, 0.14),
                                               local_crops_number=8,
                                               global_crops_size=224,
                                               local_crops_size=96)
         dataset = KFoldLymphDataset(root=["../dataset"], transform=transform)
         for idx, d in enumerate(dataset):
-            show(d['img'][:2])
-            show(d['img'][2:])
+            show(d['img'][:2], name=f"global_{idx}")
+            show(d['img'][2:], name=f"local_{idx}")
             if idx == 5:
                 break
 
     def _test_albumentations(self):
-        transform = AlbumentationsLymphNode(global_crops_scale=(0.95, 1.0),
-                                            local_crops_scale=(0.50, 0.75),
+        transform = AlbumentationsLymphNode(global_crops_scale=(0.14, 1.0),
+                                            local_crops_scale=(0.05, 0.14),
                                             local_crops_number=8,
                                             global_crops_size=224,
                                             local_crops_size=96)

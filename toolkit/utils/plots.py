@@ -4,11 +4,12 @@ import torchvision
 import torchvision.transforms.functional
 
 from torchvision.utils import make_grid
+from pathlib import Path
 
 plt.rcParams["savefig.bbox"] = 'tight'
 
 
-def show(imgs, save_dir=None, fname=None):
+def show(imgs, save_dir=Path(''), name=None):
     if not isinstance(imgs, list):
         imgs = [imgs]
     fig, axs = plt.subplots(ncols=len(imgs), squeeze=False)
@@ -18,10 +19,7 @@ def show(imgs, save_dir=None, fname=None):
         axs[0, i].imshow(np.asarray(img))
         axs[0, i].set(xticklabels=[], yticklabels=[], xticks=[], yticks=[])
 
-    if save_dir is not None:
-        fig.savefig(save_dir / f'{fname}.png', dpi=200)
-    else:
-        plt.show()
+    plt.savefig(save_dir / f'{"show" if name is None else name}.png', dpi=200)
     plt.close()
 
 

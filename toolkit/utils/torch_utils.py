@@ -95,7 +95,8 @@ def get_params_groups(model):
             not_regularized.append(param)
         else:
             regularized.append(param)
-    return [{'params': regularized}, {'params': not_regularized, 'weight_decay': 0.}]
+    return [{'params': regularized},
+            {'params': not_regularized, 'weight_decay': 0.}]
 
 
 def has_batchnorms(model):
@@ -114,7 +115,8 @@ def has_batchnorms(model):
             (
                 nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.SyncBatchNorm)
         )
-        for module in model.modules())
+        for module in model.modules()
+    )
 
 
 def accuracy(output, target, topk=(1,)):
@@ -124,7 +126,10 @@ def accuracy(output, target, topk=(1,)):
     _, pred = output.topk(maxk, 1, True, True)
     pred = pred.t()
     correct = pred.eq(target.reshape(1, -1).expand_as(pred))
-    return [correct[:k].reshape(-1).float().sum(0) * 100. / batch_size for k in topk]
+    return [
+        correct[:k].reshape(-1).float().sum(0) * 100. / batch_size
+        for k in topk
+    ]
 
 
 def _no_grad_trunc_normal_(tensor, mean, std, a, b):

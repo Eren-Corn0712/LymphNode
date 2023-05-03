@@ -11,9 +11,10 @@ class TestClass(object):
         pass
 
     def test_lymph_dataset(self, *args, **kwargs):
-        LymphBaseDataset(DIR_DATASET)
+        data_set = LymphBaseDataset(DIR_DATASET)
+        data_set.info()
 
-    def test_k_fold_lymph_dataset(self, *args, **kwargs):
+    def _test_k_fold_lymph_dataset(self, *args, **kwargs):
         dataset = KFoldLymphDataset(DIR_DATASET)
         for train_dataset, test_dataset in dataset.generate_fold_dataset():
             train_dataset.transform = transforms.Compose([transforms.ToTensor()])

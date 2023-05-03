@@ -3,8 +3,6 @@ import toolkit.utils.torch_utils
 
 import torch
 import torch.nn as nn
-import torch.distributed as dist
-import os
 import json
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -12,11 +10,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 from pathlib import Path
-
+from torch.nn.parallel import DistributedDataParallel as DDP
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
+
 import toolkit.models.swin_transformer as swin_transformer
 import toolkit.models.resnet as resnet
-
 from toolkit.utils import LOGGER
 from toolkit.models.head import LinearClassifier
 from toolkit.utils.torch_utils import de_parallel, time_sync, accuracy, detach_to_cpu_numpy, get_model_device
@@ -66,6 +64,9 @@ def run(
     model.eval()
 
     linear_classifier = linear_classifier.to(device=device)
+    if args.distributed:
+        # model = DDP(model, device_ids=[args.gpu])
+        linear_classifier = DDP(linear_classifier, device_ids=[args.gpu])
 
     # set optimizer
     optimizer = torch.optim.SGD(
@@ -84,17 +85,32 @@ def run(
     best_f1 = 0
     best_result = None
 
-    # last, best path
+    # last, best ckpt path
     last_w, best_w = (save_dir / "last.pth", save_dir / "best.pth")
     for epoch in range(0, epochs + 1):
+        if args.distributed:
+            train_loader.sampler.set_epoch(epoch)
 
-        train_stats = train(model, linear_classifier, optimizer, train_loader, epoch, args.n_last_blocks, depths)
+        train_stats = train(
+            model=model,
+            linear_classifier=linear_classifier,
+            optimizer=optimizer,
+            loader=train_loader,
+            epoch=epoch,
+            n=args.n_last_blocks,
+            depths=depths
+        )
 
         scheduler.step()
 
         log_stats = merge_dict_with_prefix({}, train_stats, "train_")
 
-        test_stats = validate_network(val_loader, model, linear_classifier, args.n_last_blocks, depths)
+        test_stats = validate_network(
+            val_loader=val_loader,
+            model=model,
+            linear_classifier=linear_classifier,
+            n=args.n_last_blocks,
+            depths=depths)
 
         exclude = ("targets", "predicts")
         log_stats = merge_dict_with_prefix(log_stats, test_stats, "test_", exclude=exclude)
@@ -133,7 +149,8 @@ def run(
                 cls_report = classification_report(
                     test_stats["targets"],
                     test_stats["predicts"],
-                    target_names=name, output_dict=True)
+                    target_names=name,
+                    output_dict=True)
 
                 pd.DataFrame(cls_report).to_csv(save_dir / 'best.csv')
                 best_result = cls_report
@@ -190,10 +207,11 @@ def train(model, linear_classifier, optimizer, loader, epoch, n, depths):
         optimizer.step()
 
         # Logging
+        batch_size = inp.shape[0]
         time_sync()
-        metric_logger.update(acc1=acc1.item())
         metric_logger.update(loss=loss.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        metric_logger.meters['acc1'].update(acc1.item(), num=batch_size)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()

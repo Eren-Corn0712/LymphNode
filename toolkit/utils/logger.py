@@ -7,6 +7,7 @@ import json
 from toolkit.utils import LOGGER
 from toolkit.utils.dist_utils import is_main_process, is_enabled
 from collections import defaultdict, deque
+from tqdm import tqdm
 
 
 class SmoothedValue:
@@ -123,7 +124,7 @@ class MetricLogger(object):
         with open(self.save_dir / 'log.json', "a") as f:
             f.write(json.dumps(dict_to_dump) + "\n")
 
-    def log_every(self, iterable, print_freq, header=None, n_iterations=None, start_iteration=0):
+    def log_every(self, iterable, print_freq=20, header=None, n_iterations=None, start_iteration=0):
         i = start_iteration
         if not header:
             header = ""
@@ -159,21 +160,19 @@ class MetricLogger(object):
                 eta_seconds = iter_time.global_avg * (n_iterations - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():
-                    LOGGER.info(
-                        log_msg.format(
-                            i,
-                            n_iterations,
-                            eta=eta_string,
-                            meters=str(self),
-                            time=iter_time.avg * 1E3,
-                            data=data_time.avg * 1E3,
-                            memory=torch.cuda.memory_reserved() / 1E9,  # (GB)
-                        )
-                    )
+                    msg = log_msg.format(
+                        i + 1,
+                        n_iterations,
+                        eta=eta_string,
+                        meters=str(self),
+                        time=iter_time.avg * 1E3,
+                        data=data_time.avg * 1E3,
+                        memory=torch.cuda.memory_reserved() / 1E9, )  # (GB)
+                    LOGGER.info(msg)
                 else:
                     LOGGER.info(
                         log_msg.format(
-                            i,
+                            i + 1,
                             n_iterations,
                             eta=eta_string,
                             meters=str(self),
