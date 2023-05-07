@@ -1,7 +1,7 @@
 import toolkit.models.swin_transformer as swin_transformer
 import toolkit.models.resnet as resnet
 
-from toolkit.models.head import DINOHead
+from toolkit.models.head import DINOHead, MixDINOHead
 from toolkit.models.care import AttnHead
 from toolkit.utils import LOGGER
 
@@ -43,15 +43,17 @@ def create_teacher_student(args):
                     model.num_features,
                     args.out_dim,
                     use_bn=args.use_bn_in_head,
-                    norm_last_layer=args.norm_last_layer)
-
-            if args.use_attention_head:
-                setattr(model, "use_attention_head", args.use_attention_head)
-                model.attn_head = AttnHead(
-                    model.num_features,
-                    args.out_dim,
                     norm_last_layer=args.norm_last_layer
                 )
+            if args.use_mix_prediction:
+                setattr(model, "use_mix_prediction", args.use_mix_prediction)
+                model.mix_head = MixDINOHead(
+                    model.num_features,
+                    args.out_dim,
+                    use_bn=args.use_bn_in_head,
+                    norm_last_layer=args.norm_last_layer
+                )
+
     else:
         raise ValueError(f"Unknown architecture: {args.arch}")
 

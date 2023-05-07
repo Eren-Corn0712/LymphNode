@@ -69,9 +69,8 @@ def get_args_parser():
     parser.add_argument('--use_dense_prediction', default=False, type=bool_flag,
                         help="Whether to use dense prediction in projection head (Default: False)")
 
-    # additional loss
-    parser.add_argument('--use_attention_head', default=False, type=bool_flag,
-                        help="Wheter to use the attention head.")
+    parser.add_argument('--use_mix_prediction', default=True, type=bool_flag,
+                        help="Whether to use mix head in projection head (Default: False)")
 
     # Temperature teacher parameters
     parser.add_argument('--warmup_teacher_temp', default=0.04, type=float,
@@ -507,10 +506,16 @@ def train_one_epoch(
                     total_loss += loss
                     total_items = {**total_items, **loss_items}
 
-                if loss_key == "attn_loss":
-                    loss, loss_items = loss_fun(s_attn_out=student_output["attn_head"],
-                                                t_attn_out=teacher_output["attn_head"],
-                                                epoch=epoch)
+                if loss_key == "mix_ddino_loss":
+                    loss, loss_items = loss_fun(
+                        s_region_out=student_output["mix_head"],
+                        s_fea=student_output["output_fea"],
+                        s_npatch=student_output["num_patch"],
+                        t_region_out=teacher_output["mix_head"],
+                        t_fea=teacher_output["output_fea"],
+                        t_npatch=teacher_output["num_patch"],
+                        epoch=epoch
+                    )
                     total_loss += loss
                     total_items = {**total_items, **loss_items}
 

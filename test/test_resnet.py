@@ -11,7 +11,7 @@ class TestResNet(object):
 
     def test_resnet18(self):
         model = resnet18().to(self.device)
-        model_info(model, detailed=True, verbose=True, imgsz=224)
+        model_info(model, detailed=False, verbose=True, imgsz=224)
 
     def test_multi_input_forward(self):
         model = resnet18().to(self.device)
@@ -24,8 +24,8 @@ class TestResNet(object):
         global_fea = int(224 / 32)
         local_fea = int(96 / 32)
         output = model(input)
-        assert b * l == output[0].shape[0]
-        assert b * 2 * (global_fea ** 2) + b * (l - 2) * (local_fea ** 2) == output[1].shape[0]
+        assert b * l == output['head'].shape[0]
+        assert b * 2 * (global_fea ** 2) + b * (l - 2) * (local_fea ** 2) == output['dense_head'].shape[0]
 
     def test_n_block_forward(self):
         model = resnet50().to(self.device)
