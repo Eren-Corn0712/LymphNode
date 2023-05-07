@@ -6,10 +6,13 @@ import torchvision.transforms.functional
 
 from torchvision.utils import make_grid
 from pathlib import Path
+from toolkit.utils import plt_settings, TryExcept
 
 plt.rcParams["savefig.bbox"] = 'tight'
 
 
+@TryExcept()
+@plt_settings()
 def show(imgs, save_dir=Path(''), name=None):
     if not isinstance(imgs, list):
         imgs = [imgs]
@@ -24,6 +27,8 @@ def show(imgs, save_dir=Path(''), name=None):
     plt.close()
 
 
+@TryExcept()
+@plt_settings()
 def plot_txt(file_path, keyword, save_dir=Path(''), name=None):
     with open(file_path) as f:
         first_line = f.readline().strip()
@@ -60,6 +65,8 @@ def scale_to_01_range(x):
     return starts_from_zero / value_range
 
 
+@TryExcept()
+@plt_settings()
 def tsne_plot(tsne, labels, save_dir, fname):
     tx = tsne[:, 0]
     ty = tsne[:, 1]

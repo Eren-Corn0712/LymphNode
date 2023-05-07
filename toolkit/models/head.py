@@ -98,12 +98,14 @@ class MixDINOHead(nn.Module):
 
         self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
 
-    def forward(self, output_cls, output_fea, num_patch):
+    def forward(self, output_cls: List, output_fea: List, num_patch: List):
         batch_size = output_cls[0].shape[0] // 2
         output = []
         for cls, fea, patch in zip(output_cls, output_fea, num_patch):
-            n_sample = cls.shape[0] // batch_size
-            split_size = patch * batch_size
+            # cls: 2B, K
+            # fea: (2BN + 8Bn), K
+            n_sample = cls.shape[0] // batch_size  # 2 or 8
+            split_size = patch * batch_size  # BN
             fea = torch.split(fea, [split_size] * n_sample, dim=0)
             fea = torch.cat([f.reshape(batch_size, patch, -1) for f in fea], dim=0)
 

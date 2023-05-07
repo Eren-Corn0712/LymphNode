@@ -10,6 +10,8 @@ import sys
 import tempfile
 import threading
 import uuid
+import matplotlib.pyplot as plt
+
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Union
@@ -317,6 +319,41 @@ def print_options(opt):
         message += '{:>25}: {:<30}{}\n'.format(str(k), str(v), comment)
     message += '----------------- End -------------------'
     LOGGER.info(message)
+
+
+def plt_settings(rcparams={'font.size': 11}, backend='Agg'):
+    """
+    Decorator to temporarily set rc parameters and the backend for a plotting function.
+
+    Usage:
+        decorator: @plt_settings({"font.size": 12})
+        context manager: with plt_settings({"font.size": 12}):
+
+    Args:
+        rcparams (dict): Dictionary of rc parameters to set.
+        backend (str, optional): Name of the backend to use. Defaults to 'Agg'.
+
+    Returns:
+        callable: Decorated function with temporarily set rc parameters and backend.
+    """
+
+    def decorator(func):
+        """Decorator to apply temporary rc parameters and backend to a function."""
+
+        def wrapper(*args, **kwargs):
+            """Sets rc parameters and backend, calls the original function, and restores the settings."""
+            original_backend = plt.get_backend()
+            plt.switch_backend(backend)
+
+            with plt.rc_context(rcparams):
+                result = func(*args, **kwargs)
+
+            plt.switch_backend(original_backend)
+            return result
+
+        return wrapper
+
+    return decorator
 
 
 def average_classification_reports(reports):

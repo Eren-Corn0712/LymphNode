@@ -22,7 +22,6 @@ class ResnetWrapper(ResNet):
         if not isinstance(x, list):
             x = [x]
 
-        batch_size = x[0].shape[0]
         view_sizes = [inp.shape[-1] for inp in x]
         unique_sizes_count = torch.tensor(view_sizes).unique_consecutive(return_counts=True)[1]
         idx_crops = unique_sizes_count.cumsum(0)
