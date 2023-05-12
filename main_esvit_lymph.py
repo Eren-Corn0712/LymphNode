@@ -51,7 +51,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('EsViT', add_help=False)
 
     # Model parameters
-    parser.add_argument('--arch', default='resnet18', type=str,
+    parser.add_argument('--arch', default='swin_custom', type=str,
                         help="""Name of architecture to train. For quick experiments with ViTs,
                          we recommend using deit_tiny or deit_small.""")
     parser.add_argument('--out_dim', default=1024, type=int, help="""Dimensionality of
@@ -66,10 +66,10 @@ def get_args_parser():
     parser.add_argument('--use_bn_in_head', default=False, type=bool_flag,
                         help="Whether to use batch normalizations in projection head (Default: False)")
 
-    parser.add_argument('--use_dense_prediction', default=False, type=bool_flag,
+    parser.add_argument('--use_dense_prediction', default=True, type=bool_flag,
                         help="Whether to use dense prediction in projection head (Default: False)")
 
-    parser.add_argument('--use_mix_prediction', default=True, type=bool_flag,
+    parser.add_argument('--use_mix_prediction', default=False, type=bool_flag,
                         help="Whether to use mix head in projection head (Default: False)")
 
     # Temperature teacher parameters
@@ -95,7 +95,7 @@ def get_args_parser():
     parser.add_argument('--clip_grad', type=float, default=3.0, help="""Maximal parameter
         gradient norm if using gradient clipping. Clipping with norm .3 ~ 1.0 can
         help optimization for larger ViT architectures. 0 for disabling.""")
-    parser.add_argument('--batch_size_per_gpu', default=64, type=int,
+    parser.add_argument('--batch_size_per_gpu', default=16, type=int,
                         help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
     parser.add_argument('--epochs', default=10, type=int, help='Number of epochs of training.')
     parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
@@ -336,7 +336,7 @@ def train_esvit(args):
             if is_main_process():
                 with txt_file.open("a") as f:
                     f.write(json.dumps(log_stats) + "\n")
-
+                plot_txt(txt_file, keyword="loss", save_dir=args.fold_save_dir, name="result")
             # features, labels = get_features(val_loader,
             #                                 teacher,
             #                                 args.n_last_blocks,
@@ -347,10 +347,6 @@ def train_esvit(args):
             # tsne_plot(tsne, labels, fold_output_dir, epoch)
             # tsne_video(fold_output_dir, fold_output_dir)
             # del tsne, features, labels, save_dict, train_stats, log_stats,
-
-        # Plot loss
-        if is_main_process():
-            plot_txt(txt_file, keyword="loss", save_dir=args.fold_save_dir, name="result")
 
         # ============ Linear evaluation ============
         # ============ Prepare dataloader and dataset transform ============
@@ -416,7 +412,7 @@ def train_esvit(args):
 
 
 @torch.no_grad()
-def get_features(val_loader, model, n, avgpool, depths):
+def get_features(val_loader, model, n, depths):
     # we'll store the features as NumPy array of size num_images x feature_size
     metric_logger = MetricLogger(delimiter="  ")
 
@@ -508,10 +504,10 @@ def train_one_epoch(
 
                 if loss_key == "mix_ddino_loss":
                     loss, loss_items = loss_fun(
-                        s_region_out=student_output["mix_head"],
+                        s_mix_region_out=student_output["mix_head"],
                         s_fea=student_output["output_fea"],
                         s_npatch=student_output["num_patch"],
-                        t_region_out=teacher_output["mix_head"],
+                        t_mix_region_out=teacher_output["mix_head"],
                         t_fea=teacher_output["output_fea"],
                         t_npatch=teacher_output["num_patch"],
                         epoch=epoch
@@ -539,7 +535,7 @@ def train_one_epoch(
 
         # student update
         if scaler is not None:
-            scaler.scale(loss).backward()
+            scaler.scale(total_loss).backward()
             if args.clip_grad is not None:
                 # we should unscale the gradients of optimizes assigned params if you do gradient clipping
                 scaler.unscale_(optimizer)
@@ -547,7 +543,7 @@ def train_one_epoch(
             scaler.step(optimizer)
             scaler.update()
         else:
-            loss.backward()
+            total_loss.backward()
             if args.clip_grad is not None:
                 nn.utils.clip_grad_norm_(student.parameters(), args.clip_grad)
             optimizer.step()

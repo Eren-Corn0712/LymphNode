@@ -28,7 +28,7 @@ class ResnetWrapper(ResNet):
 
         output = {}
         output_cls, output_fea, num_patch = [], [], []
-        # Multi view forward
+        # Multi-view forward
         for start_idx, end_idx in zip([0] + idx_crops[:-1].tolist(), idx_crops.tolist()):
             out_cls, out_fea = self.forward_features(torch.cat(x[start_idx: end_idx]))
 
@@ -39,6 +39,7 @@ class ResnetWrapper(ResNet):
 
             # Record batch size
             num_patch.append(num_fea)
+
             del out_cls, out_fea
 
         if hasattr(self, "head") and output_cls:

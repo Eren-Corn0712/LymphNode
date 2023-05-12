@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 import json
 import torchvision
 import torchvision.transforms.functional
-
+import seaborn as sns
+import pandas as pd
 from torchvision.utils import make_grid
 from pathlib import Path
 from toolkit.utils import plt_settings, TryExcept
@@ -103,3 +104,15 @@ def tsne_plot(tsne, labels, save_dir, fname):
     # finally, show the plot
     if save_dir is not None:
         fig.savefig(save_dir / f'{fname}-tsne.png', dpi=200)
+
+
+@TryExcept()
+@plt_settings()
+def plot_confusion_matrix(cm, name, save_dir=Path()):
+    cm = pd.DataFrame(cm, name, name)
+    plt.figure(figsize=(9, 6))
+    sns.heatmap(cm, annot=True, fmt="d", cmap='BuGn')
+    plt.xlabel("prediction")
+    plt.ylabel("label (ground truth)")
+    plt.savefig(save_dir / "best_confusion_matrix.png")
+    plt.close()

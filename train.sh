@@ -8,7 +8,7 @@ DIM=4096
 python -m torch.distributed.run --nproc_per_node=1 --master_port 25670 main_esvit_lymph.py \
   --arch $MODELS \
   --data_path dataset leaf_tumor_video \
-  --save_dir runs/2023-04-27-w-dense-w-attn-new_aug/$MODELS/$DIM \
+  \
   --batch_size_per_gpu 128 \
   --momentum_teacher 0.9995 \
   --use_bn_in_head True \

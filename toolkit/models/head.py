@@ -96,8 +96,6 @@ class MixDINOHead(nn.Module):
         if norm_last_layer:
             self.last_layer.weight_g.requires_grad = False
 
-        self.avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-
     def forward(self, output_cls: List, output_fea: List, num_patch: List):
         batch_size = output_cls[0].shape[0] // 2
         output = []

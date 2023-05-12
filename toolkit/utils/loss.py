@@ -64,7 +64,9 @@ class DINOLoss(nn.Module):
 
         return (
             total_loss.sum(),
-            {"global_loss": total_loss.item()}
+            {
+                "global_loss": total_loss.item()
+            }
         )
 
     @torch.inference_mode()
@@ -183,9 +185,7 @@ class DDINOLoss(nn.Module):
                 # B x T_s x K --> B
                 loss_grid = torch.sum(- t_indexed_region * F.log_softmax(s_region_cur, dim=-1), dim=[-1]).mean(-1)
 
-                loss = 0.5 * loss_grid
-                total_loss[1] += loss.mean()
-
+                total_loss[1] += (0.5 * loss_grid).mean()
                 n_loss_terms += 1
 
         # global local
@@ -196,7 +196,10 @@ class DDINOLoss(nn.Module):
 
         return (
             total_loss.sum(),
-            {"global_loss": total_loss[0].item(), "local_loss": total_loss[1].item()}
+            {
+                "global_loss": total_loss[0].item(),
+                "local_loss": total_loss[1].item()
+            }
         )
 
     @torch.inference_mode()
@@ -255,17 +258,17 @@ class MixDDINOLoss(nn.Module):
 
     def forward(
             self,
-            s_region_out,
+            s_mix_region_out,
             s_fea,
             s_npatch,
-            t_region_out,
+            t_mix_region_out,
             t_fea,
             t_npatch,
             epoch
     ):
         # teacher centering and sharpening
         teacher_temp = self.teacher_temp_schedule[epoch]
-        t_region = F.softmax((t_region_out - self.center_grid) / teacher_temp, dim=-1)
+        t_region = F.softmax((t_mix_region_out - self.center_grid) / teacher_temp, dim=-1)
         t_region = t_region.detach().chunk(2)
         t_fea = t_fea.chunk(2)
 
@@ -273,8 +276,8 @@ class MixDDINOLoss(nn.Module):
         batch_size = t_region[0].shape[0] // num_patches  # batch size
 
         # student sharpening
-        s_region = s_region_out / self.student_temp
-        s_split_size = [s_npatch[0]] * 2 + [s_npatch[1]] * (self.ncrops - 2)
+        s_region = s_mix_region_out / self.student_temp
+        s_split_size = [s_npatch[0]] * 2 + [s_npatch[1]] * (self.ncrops - 2)  # crop size 49 or 9
 
         s_split_size_bs = [i * batch_size for i in s_split_size]
 
@@ -284,13 +287,13 @@ class MixDDINOLoss(nn.Module):
         total_loss = torch.zeros(1, device=s_fea[0].device)
         n_loss_terms = 0
         for iq, q in enumerate(t_region):
-            for iv, v in enumerate(t_region):
+            for iv, v in enumerate(s_region):
                 if iq == iv:
                     continue
-                t_region_cur = t_region[iq].view(batch_size, num_patches, -1)  # B x T_t x K
+                t_region_cur = q.view(batch_size, num_patches, -1)  # B x T_t x K
                 t_fea_cur = t_fea[iq].view(batch_size, num_patches, -1)  # B x T_t x P
 
-                s_region_cur = s_region[iv].view(batch_size, s_split_size[iv], -1)  # B x T_s x K
+                s_region_cur = v.view(batch_size, s_split_size[iv], -1)  # B x T_s x K
                 s_fea_cur = s_fea[iv].view(batch_size, s_split_size[iv], -1)  # B x T_s x P
 
                 # similarity matrix between two sets of region features
@@ -310,24 +313,20 @@ class MixDDINOLoss(nn.Module):
                 total_loss[0] += loss_grid.mean()
                 n_loss_terms += 1
 
+        total_loss[0] /= n_loss_terms
+        self.update_center(teacher_grid_output=t_mix_region_out)
         return (
             total_loss.sum(),
-            {"mix_loss": total_loss.item()}
+            {
+                "mix_loss": total_loss.item()
+            }
         )
 
     @torch.inference_mode()
-    def update_center(self, teacher_output, teacher_grid_output):
+    def update_center(self, teacher_grid_output):
         """
         Update center used for teacher output.
         """
-
-        # view level center update
-        batch_center = torch.sum(teacher_output, dim=0, keepdim=True)
-        if dist.is_initialized():
-            dist.all_reduce(batch_center)
-            batch_center = batch_center / (len(teacher_output) * dist.get_world_size())
-        else:
-            batch_center = torch.mean(batch_center, dim=0, keepdim=True)
 
         # region level center update
         batch_grid_center = torch.sum(teacher_grid_output, dim=0, keepdim=True)
@@ -337,8 +336,6 @@ class MixDDINOLoss(nn.Module):
         else:
             batch_grid_center = torch.mean(batch_grid_center, dim=0, keepdim=True)
 
-        # ema update
-        self.center = self.center * self.center_momentum + batch_center * (1 - self.center_momentum)
         self.center_grid = self.center_grid * self.center_momentum + batch_grid_center * (1 - self.center_momentum)
 
 

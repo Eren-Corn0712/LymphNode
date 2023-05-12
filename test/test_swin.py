@@ -25,11 +25,15 @@ class TestSwinTransformer(unittest.TestCase):
         model.head = nn.Identity()
         model.dense_head = nn.Identity()
         model.use_dense_prediction = True
-        output = model(self.input)
-        self.assertEqual(output[0].shape, torch.Size((len(self.input) * self.b, 768)))
-        self.assertEqual(output[1].shape, torch.Size(
-            (len(self.input[:2]) * self.b * self.global_h * self.global_w + len(
-                self.input[2:]) * self.b * self.local_h * self.local_w, 768)))
+
+        b, c = 10, 3
+        input = [torch.randn(b, c, i, i).to(self.device) for i in [224, 224, 96, 96, 96, 96]]
+        l = len(input)
+        global_fea = int(224 / 32)
+        local_fea = int(96 / 32)
+        output = model(input)
+        assert b * l == output['head'].shape[0]
+        assert b * 2 * (global_fea ** 2) + b * (l - 2) * (local_fea ** 2) == output['dense_head'].shape[0]
 
     def test_n_block_forward(self):
         model = swin_custom().to(self.device)
@@ -43,6 +47,7 @@ class TestSwinTransformer(unittest.TestCase):
         for i in range(1, 5):
             num_features_linear = sum(num_features[-i:])
             y = model.forward_return_n_last_blocks(x, n=i, depths=depths)
+            print(y.shape)
             assert y.shape == torch.Size([10, num_features_linear]), "Error"
 
 

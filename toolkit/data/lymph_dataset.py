@@ -106,8 +106,8 @@ class KFoldLymphDataset(LymphBaseDataset):
             self.check_dataset(train_labels, test_labels, 'patient_id')
 
             train_dataset, test_dataset = WrapperFoldDataset(train_labels), WrapperFoldDataset(test_labels)
-            copy_attr(train_dataset, self, include=("class_to_idx", "classes"))
-            copy_attr(test_dataset, self, include=("class_to_idx", "classes"))
+            copy_attr(train_dataset, self, include=("class_to_idx", "classes"))  # copy attr from self to dataset
+            copy_attr(test_dataset, self, include=("class_to_idx", "classes"))  # copy attr from self to dataset
 
             yield train_dataset, test_dataset
 

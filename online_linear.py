@@ -7,7 +7,6 @@ import json
 import pandas as pd
 import matplotlib.pyplot as plt
 
-import seaborn as sns
 import numpy as np
 from pathlib import Path
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -21,7 +20,7 @@ from toolkit.utils.torch_utils import de_parallel, time_sync, accuracy, detach_t
 from toolkit.utils.dist_utils import save_on_master, is_main_process, get_world_size
 from toolkit.utils.python_utils import merge_dict_with_prefix
 from toolkit.utils.logger import (MetricLogger, SmoothedValue)
-from toolkit.utils.plots import plot_txt
+from toolkit.utils.plots import plot_txt, plot_confusion_matrix
 
 
 def run(
@@ -159,15 +158,7 @@ def run(
 
                 cm = confusion_matrix(test_stats["targets"],
                                       test_stats["predicts"])
-
-                cm = pd.DataFrame(cm, name, name)
-
-                plt.figure(figsize=(9, 6))
-                sns.heatmap(cm, annot=True, fmt="d", cmap='BuGn')
-                plt.xlabel("prediction")
-                plt.ylabel("label (ground truth)")
-                plt.savefig(save_dir / "best_confusion_matrix.png")
-                plt.close()
+                plot_confusion_matrix(cm, name, save_dir)
 
         del save_dict
 
