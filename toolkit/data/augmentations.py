@@ -440,7 +440,8 @@ def create_transform(args, name):
 
     elif name == "eval_train":
         transform = transforms.Compose([
-            transforms.RandomResizedCrop(224),
+            transforms.RandomResizedCrop(size=args.global_crops_size,
+                                         scale=args.global_crops_scale),
             transforms.RandomHorizontalFlip(),
             transforms.RandomVerticalFlip(),
             transforms.Grayscale(num_output_channels=3),

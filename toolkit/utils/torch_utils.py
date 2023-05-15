@@ -499,7 +499,7 @@ def build_optimizer(optimizer: str, model: nn.Module) -> torch.optim.Optimizer:
     else:
         raise ValueError(f"Unknown optimizer:{optimizer}")
 
-    LOGGER.info(f"Optimizer is {optimizer.__class__.__name__}")
+    LOGGER.info(f"Optimizer : {optimizer.__class__.__name__}")
     return optimizer
 
 

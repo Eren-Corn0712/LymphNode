@@ -129,11 +129,11 @@ class DDINOLoss(nn.Module):
         """
 
         # teacher centering and sharpening
-        teacher_temp = self.teacher_temp_schedule[epoch]
-        t_cls = F.softmax((t_cls_out - self.center) / teacher_temp, dim=-1)
+        temp = self.teacher_temp_schedule[epoch]
+        t_cls = F.softmax((t_cls_out - self.center) / temp, dim=-1)
         t_cls = t_cls.detach().chunk(2)
 
-        t_region = F.softmax((t_region_out - self.center_grid) / teacher_temp, dim=-1)
+        t_region = F.softmax((t_region_out - self.center_grid) / temp, dim=-1)
         t_region = t_region.detach().chunk(2)
         t_fea = t_fea.chunk(2)
 
@@ -416,5 +416,5 @@ def build_loss(args, device) -> Dict:
         ).to(device)
 
     s = " ".join(v.__class__.__name__ for k, v in criterion.items())
-    LOGGER.info(f"Criterion is {s}")
+    LOGGER.info(f"Criterion : {s}")
     return criterion

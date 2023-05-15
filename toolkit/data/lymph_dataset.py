@@ -131,6 +131,8 @@ class KFoldLymphDataset(LymphBaseDataset):
 
         LOGGER.info(f"train data Patient id: {' '.join(s for s in train_check)}")
         LOGGER.info(f"test data Patient id: {' '.join(s for s in test_check)}")
+        LOGGER.info(f"train data Patient num : {len(train_check)}")
+        LOGGER.info(f"test data Patient num : {len(test_check)}")
 
     def __len__(self):
         return len(self.labels)

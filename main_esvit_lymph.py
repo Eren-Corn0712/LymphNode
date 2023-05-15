@@ -149,10 +149,12 @@ def get_args_parser():
         distributed training; see https://pytorch.org/docs/stable/distributed.html""")
     parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
 
-    parser.add_argument('--n_last_blocks', default=2, type=int, help="""Concatenate [CLS] tokens
+    parser.add_argument('-- ', default=2, type=int, help="""Concatenate [CLS] tokens
         for the `n` last blocks. We use `n=4` when evaluating DeiT-Small and `n=1` with ViT-Base.""")
     parser.add_argument('--num_labels', default=2, type=int, help='number of classes in a dataset')
     parser.add_argument('--device', default="cuda")
+
+    parser.add_argument('--weighted_sampler', default=True, type=bool_flag)
 
     # Linear Parser
     parser.add_argument('--linear_lr', type=float, default=0.01)
@@ -173,7 +175,7 @@ def train_esvit(args):
 
     device = torch.device(args.device)
     # ============ preparing data ... ============
-    k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=3, shuffle=True, random_state=args.seed)
+    k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=5, shuffle=True, random_state=args.seed)
 
     for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
         # ============ K Folder training start  ... ============

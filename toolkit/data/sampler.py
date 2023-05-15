@@ -3,9 +3,13 @@ import math
 import torch
 import torch.utils.data
 import torch.distributed as dist
+from torch.utils.data import (RandomSampler, WeightedRandomSampler, SequentialSampler, Sampler)
+from torch.utils.data.distributed import (DistributedSampler)
+from typing import Dict
+from toolkit.utils import LOGGER
 
 
-class RASampler(torch.utils.data.Sampler):
+class RASampler(Sampler):
     """Sampler that restricts data loading to a subset of the dataset for distributed,
     with repeated augmentation.
     It ensures that different each augmented version of a sample will be visible to a
@@ -63,15 +67,38 @@ class RASampler(torch.utils.data.Sampler):
         self.epoch = epoch
 
 
+def compute_sample_weights(dataset):
+    class_to_idx: Dict = dataset.class_to_idx
+    class_sample_count = {k: 0 for k in class_to_idx.keys()}
+    for i in dataset:
+        class_sample_count[i["type_name"]] += 1
+
+    class_sample_weight = {k: 1 / v for k, v in class_sample_count.items()}
+    weights = torch.tensor([
+        class_sample_weight[i["type_name"]] for i in dataset
+    ])
+    assert len(weights) == len(dataset), "The sample weights number is not equal the dataset!"
+    return weights
+
+
 def creat_sampler(args, train_dataset, test_dataset):
     if args.distributed:
         if hasattr(args, "ra_sampler") and args.ra_sampler:
             train_sampler = RASampler(train_dataset, shuffle=True, repetitions=args.ra_reps)
+        elif hasattr(args, "weighted_sampler") and args.weighted_sampler:
+            weights = compute_sample_weights(train_dataset)
+            train_sampler = WeightedRandomSampler(weights=weights, num_samples=len(train_dataset))
         else:
-            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
+            train_sampler = DistributedSampler(train_dataset)
+        test_sampler = DistributedSampler(test_dataset, shuffle=False)
     else:
-        train_sampler = torch.utils.data.RandomSampler(train_dataset)
-        test_sampler = torch.utils.data.SequentialSampler(test_dataset)
+        if hasattr(args, "weighted_sampler") and args.weighted_sampler:
+            weights = compute_sample_weights(train_dataset)
+            train_sampler = WeightedRandomSampler(weights=weights, num_samples=len(train_dataset))
+        else:
+            train_sampler = RandomSampler(train_dataset)
+        test_sampler = SequentialSampler(test_dataset)
 
+    LOGGER.info(f"Training Sampler : {train_sampler.__class__.__name__}")
+    LOGGER.info(f"Test Sampler : {test_sampler.__class__.__name__}")
     return train_sampler, test_sampler
