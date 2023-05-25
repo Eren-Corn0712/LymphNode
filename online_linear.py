@@ -1,3 +1,5 @@
+import csv
+
 import toolkit.utils.logger
 import toolkit.utils.torch_utils
 
@@ -15,10 +17,11 @@ from sklearn.metrics import classification_report, confusion_matrix, f1_score
 import toolkit.models.swin_transformer as swin_transformer
 import toolkit.models.resnet as resnet
 from toolkit.utils import LOGGER
-from toolkit.models.head import LinearClassifier
-from toolkit.utils.torch_utils import de_parallel, time_sync, accuracy, detach_to_cpu_numpy, get_model_device
+from toolkit.models import create_linear_layer
+from toolkit.utils.torch_utils import (de_parallel, time_sync, accuracy, detach_to_cpu_numpy, get_model_device,
+                                       restart_from_checkpoint)
 from toolkit.utils.dist_utils import save_on_master, is_main_process, get_world_size
-from toolkit.utils.python_utils import merge_dict_with_prefix
+from toolkit.utils.python_utils import (merge_dict_with_prefix, batch_dataconcat)
 from toolkit.utils.logger import (MetricLogger, SmoothedValue)
 from toolkit.utils.plots import plot_txt, plot_confusion_matrix
 
@@ -32,33 +35,7 @@ def run(
         epochs=100,
         lr=0.001,
 ):
-    if args.arch in swin_transformer.__dict__.keys():
-        embed_dim = model.embed_dim
-        depths = model.depths
-
-        num_features = []
-        for i, d in enumerate(depths):
-            num_features += [int(embed_dim * 2 ** i)] * d
-
-        LOGGER.info(f"num_features: {num_features}")
-        num_features_linear = sum(num_features[-args.n_last_blocks:])
-        LOGGER.info(f'num_features_linear {num_features_linear}')
-        linear_classifier = LinearClassifier(num_features_linear, args.num_labels)
-
-    elif args.arch in resnet.__dict__.keys():
-        depths = model.layers
-        embed_dim = model.conv1.out_channels * model.layer1[-1].expansion
-        num_features = []
-        for i, d in enumerate(depths):
-            num_features += [int(embed_dim * 2 ** i)] * d
-
-        LOGGER.info(f"num_features: {num_features}")
-        num_features_linear = sum(num_features[-args.n_last_blocks:])
-        LOGGER.info(f'num_features_linear {num_features_linear}')
-        linear_classifier = LinearClassifier(num_features_linear, args.num_labels)
-
-    else:
-        raise ValueError(f"We not implemented {args.arch}")
+    linear_classifier = create_linear_layer(model, args)
 
     device = get_model_device(model)
     model.eval()
@@ -81,15 +58,25 @@ def run(
         if not save_dir.exists():
             save_dir.mkdir(parents=True, exist_ok=True)
 
-    best_acc = 0
+    to_restore = {"epoch": 0, "best_acc": 0.}
+    restart_from_checkpoint(
+        save_dir / "last.pth",
+        run_variables=to_restore,
+        state_dict=linear_classifier,
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )
+    start_epoch = to_restore["epoch"]
+    best_acc = to_restore["best_acc"]
+
     best_f1 = 0
     best_result = None
 
     # last, best ckpt path
     last_w, best_w = (save_dir / "last.pth", save_dir / "best.pth")
     txt_file = save_dir / "log.txt"
-    for epoch in range(0, epochs + 1):
-        if args.distributed:
+    for epoch in range(start_epoch, epochs + 1):
+        if args.distributed and hasattr(train_loader.sampler, "set_epoch"):
             train_loader.sampler.set_epoch(epoch)
 
         train_stats = train(
@@ -113,7 +100,7 @@ def run(
             n=args.n_last_blocks,
             depths=depths)
 
-        exclude = ("targets", "predicts")
+        exclude = ("save_dict",)
         log_stats = merge_dict_with_prefix(log_stats, test_stats, "test_", exclude=exclude)
         log_stats['epoch'] = epoch
 
@@ -139,7 +126,8 @@ def run(
         save_on_master(save_dict, last_w)
 
         if is_main_process():
-            f1 = f1_score(test_stats['targets'], test_stats['predicts'], average='weighted')
+            f1 = f1_score(test_stats['save_dict']['label'],
+                          test_stats['save_dict']['predict'], average='weighted')
             if f1 > best_f1:
                 name = train_loader.dataset.classes
                 best_acc, best_f1 = test_stats["acc1"], f1
@@ -148,17 +136,19 @@ def run(
                 save_on_master(save_dict, best_w)
 
                 cls_report = classification_report(
-                    test_stats["targets"],
-                    test_stats["predicts"],
+                    test_stats['save_dict']['label'],
+                    test_stats['save_dict']['predict'],
+                    labels=np.arange(0, len(name)),
                     target_names=name,
                     output_dict=True)
 
                 pd.DataFrame(cls_report).to_csv(save_dir / 'best.csv')
                 best_result = cls_report
 
-                cm = confusion_matrix(test_stats["targets"],
-                                      test_stats["predicts"])
+                cm = confusion_matrix(test_stats['save_dict']['label'],
+                                      test_stats['save_dict']['predict'])
                 plot_confusion_matrix(cm, name, save_dir)
+                case_analysis(test_stats['save_dict'], save_dir)
 
         del save_dict
 
@@ -168,6 +158,7 @@ def run(
 
     LOGGER.info("Training of the supervised linear classifier on frozen features completed.\n"
                 "Top-1 test accuracy: {acc:.1f}".format(acc=best_acc))
+
     return best_result
 
 
@@ -175,7 +166,7 @@ def train(model, linear_classifier, optimizer, loader, epoch, n, depths):
     linear_classifier.train()
     model.eval()
 
-    device = get_model_device(model)
+    device = get_model_device(model)  # get device
 
     metric_logger = MetricLogger(delimiter=" ")
     metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -225,23 +216,31 @@ def validate_network(val_loader, model, linear_classifier, n, depths):
 
     metric_logger = MetricLogger(delimiter=" ")
     header = 'Test:'
-    targets, predicts = [], []
+    save_dict: dict = {}
     for batch in metric_logger.log_every(val_loader, 20, header):
         # move to gpu
         inp = batch['img'].to(device, non_blocking=True)
         target = batch['label'].to(device, non_blocking=True)
 
         # compute output
-        output = model.forward_return_n_last_blocks(inp, n, depths)
-        output = linear_classifier(output)
+        backbone_output = model.forward_return_n_last_blocks(inp, n, depths)
+        output = linear_classifier(backbone_output)
         loss = nn.CrossEntropyLoss()(output, target)
 
         acc1, _ = accuracy(output, target, topk=(1, 2))
 
         _, predict = torch.max(output.data, 1)
 
-        targets.extend(detach_to_cpu_numpy(target))
-        predicts.extend(detach_to_cpu_numpy(predict))
+        save_dict = batch_dataconcat(
+            save_dict,
+            dict(
+                type_name=batch['type_name'],
+                label=detach_to_cpu_numpy(batch['label'].view(-1)),
+                patient_id=batch['patient_id'],
+                im_file=batch['im_file'],
+                predict=detach_to_cpu_numpy(predict.view(-1)),
+            )
+        )
 
         batch_size = inp.shape[0]
         metric_logger.update(loss=loss.item())
@@ -251,6 +250,43 @@ def validate_network(val_loader, model, linear_classifier, n, depths):
                 .format(top1=metric_logger.acc1, losses=metric_logger.loss))
 
     states = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    states["targets"] = targets
-    states["predicts"] = predicts
+    states['save_dict'] = save_dict
     return states
+
+
+def case_analysis(data, save_dir):
+    output = []
+    patient_id = np.array(data['patient_id'])
+    type_name = np.array(data['type_name'])
+    unique_id = np.unique(patient_id)
+    im_file = np.array(data['im_file'])
+
+    for p_id in unique_id:
+        index = np.where(patient_id == p_id)
+        type_n = np.unique(type_name[index])
+        im_f = np.unique(im_file[index])
+        if type_n.size != 1:
+            raise ValueError(f"The id {p_id} have multi label!")
+
+        label = data['label'][index]
+        predict = data['predict'][index]
+        curr_num = np.count_nonzero((label == predict))
+        acc = curr_num / len(label) * 100
+
+        d = dict(
+            file=im_f[0],
+            id=p_id,
+            type=type_n[0],
+            label_num=len(label),
+            current_num=int(curr_num),
+            accuracy=f"{acc:.4f}"
+        )
+        output.append(d)
+
+    if save_dir:
+        csv_file = save_dir / "analysis.csv"
+        fieldnames = output[0].keys()
+        with open(csv_file, 'w', newline='') as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames, restval=' ', extrasaction='ignore')
+            writer.writeheader()
+            writer.writerows(output)

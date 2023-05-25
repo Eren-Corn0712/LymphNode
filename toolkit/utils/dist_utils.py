@@ -1,4 +1,5 @@
 import os
+import socket
 import torch
 import torch.distributed as dist
 
@@ -96,3 +97,14 @@ def init_distributed_mode(args):
     )
     torch.distributed.barrier()
     setup_for_distributed(args.rank == 0)
+
+
+def find_free_network_port() -> int:
+    """Finds a free port on localhost.
+
+    It is useful in single-node training when we don't want to connect to a real main node but have to set the
+    `MASTER_PORT` environment variable.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]  # port

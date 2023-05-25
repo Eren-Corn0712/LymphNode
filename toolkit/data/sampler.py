@@ -5,7 +5,7 @@ import torch.utils.data
 import torch.distributed as dist
 from torch.utils.data import (RandomSampler, WeightedRandomSampler, SequentialSampler, Sampler)
 from torch.utils.data.distributed import (DistributedSampler)
-from typing import Dict
+from typing import Dict, Optional
 from toolkit.utils import LOGGER
 
 
@@ -67,6 +67,59 @@ class RASampler(Sampler):
         self.epoch = epoch
 
 
+class WeightedRandomDistributedSampler(DistributedSampler):
+    def __init__(self, weights, dataset, replacement=True,
+                 generator=None,
+                 # DistributedSampler __init__
+                 num_replicas: Optional[int] = None,
+                 rank: Optional[int] = None, shuffle: bool = False,
+                 seed: int = 0, drop_last: bool = False):
+        super().__init__(dataset, num_replicas, rank, shuffle, seed, drop_last)
+
+        if not isinstance(replacement, bool):
+            raise ValueError("replacement should be a boolean value, but got "
+                             "replacement={}".format(replacement))
+
+        weights_tensor = torch.as_tensor(weights, dtype=torch.double)
+        if len(weights_tensor.shape) != 1:
+            raise ValueError("weights should be a 1d sequence but given "
+                             "weights have shape {}".format(tuple(weights_tensor.shape)))
+
+        self.weights = weights_tensor
+        self.replacement = replacement
+        self.generator = generator
+
+    def __iter__(self):
+        if self.shuffle:
+            # deterministically shuffle based on epoch and seed
+            g = torch.Generator()
+            g.manual_seed(self.seed + self.epoch)
+            indices = torch.randperm(len(self.dataset), generator=g).tolist()  # type: ignore[arg-type]
+        else:
+            indices = list(range(len(self.dataset)))  # type: ignore[arg-type]
+
+        if not self.drop_last:
+            # add extra samples to make it evenly divisible
+            padding_size = self.total_size - len(indices)
+            if padding_size <= len(indices):
+                indices += indices[:padding_size]
+            else:
+                indices += (indices * math.ceil(padding_size / len(indices)))[:padding_size]
+        else:
+            # remove tail of data to make it evenly divisible.
+            indices = indices[:self.total_size]
+
+        assert len(indices) == self.total_size
+
+        # subsample
+        indices = indices[self.rank:self.total_size:self.num_replicas]
+        # [1,3,5,7,9] or [0,2,4,6,8,10] if rank=2
+        assert len(indices) == self.num_samples
+        weights_indices = torch.multinomial(self.weights, self.total_size, self.replacement, generator=self.generator)
+        sampled_indices = weights_indices[indices]
+        return iter(sampled_indices.tolist())
+
+
 def compute_sample_weights(dataset):
     class_to_idx: Dict = dataset.class_to_idx
     class_sample_count = {k: 0 for k in class_to_idx.keys()}
@@ -77,7 +130,7 @@ def compute_sample_weights(dataset):
     weights = torch.tensor([
         class_sample_weight[i["type_name"]] for i in dataset
     ])
-    assert len(weights) == len(dataset), "The sample weights number is not equal the dataset!"
+    assert len(weights) == len(dataset), "The sample weights number is not equal the data!"
     return weights
 
 

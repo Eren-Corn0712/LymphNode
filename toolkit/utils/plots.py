@@ -116,3 +116,14 @@ def plot_confusion_matrix(cm, name, save_dir=Path()):
     plt.ylabel("label (ground truth)")
     plt.savefig(save_dir / "best_confusion_matrix.png")
     plt.close()
+
+
+@TryExcept()
+@plt_settings()
+def plot_cam(visualization, save_dir=Path(), patient_id: str = None, disease_type: str = None, name: str = None,
+             predict: str = None):
+    plt.imshow(visualization)
+    plt.title("ID: {}  type: {} pred: {}".format(patient_id, disease_type, predict))
+    plt.show()
+    plt.savefig(save_dir / f"{name}-cam.png")
+    plt.close()

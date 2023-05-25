@@ -11,6 +11,7 @@ import warnings
 import torch
 import torch.nn as nn
 import torch.backends.cudnn
+import torchvision
 
 from einops import rearrange
 from toolkit.utils.checks import check_version
@@ -21,10 +22,11 @@ LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable
 RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
+TORCHVISION_0_10 = check_version(torchvision.__version__, '0.10.0')
 TORCH_1_9 = check_version(torch.__version__, '1.9.0')
 TORCH_1_11 = check_version(torch.__version__, '1.11.0')
 TORCH_1_12 = check_version(torch.__version__, '1.12.0')
-TORCH_2_X = check_version(torch.__version__, minimum='2.0')
+TORCH_2_0 = check_version(torch.__version__, minimum='2.0')
 
 
 class LARS(torch.optim.Optimizer):
@@ -345,7 +347,18 @@ def load_pretrained_weights(model, pretrained_weights, checkpoint_key):
             LOGGER.info(f"Take key {checkpoint_key} in provided checkpoint dict")
             state_dict = state_dict[checkpoint_key]
         state_dict = {k: v for k, v in state_dict.items()}
-        msg = model.load_state_dict(state_dict, strict=True)
+        msg = model.load_state_dict(state_dict, strict=False)
+        LOGGER.info(colorstr('Pretrained weights found at {} and loaded with msg: {}'.format(pretrained_weights, msg)))
+    else:
+        LOGGER.info(
+            "Please use the `--pretrained_weights` argument to indicate the path of the checkpoint to evaluate.")
+        LOGGER.info(colorstr("There is no reference weights available for this model => We use random weights."))
+
+
+def load_pretrained_linear_weights(model, pretrained_weights):
+    if os.path.isfile(pretrained_weights):
+        state_dict = torch.load(pretrained_weights, map_location="cpu")
+        msg = model.load_state_dict(state_dict['state_dict'], strict=True)
         LOGGER.info(colorstr('Pretrained weights found at {} and loaded with msg: {}'.format(pretrained_weights, msg)))
     else:
         LOGGER.info(
@@ -504,7 +517,7 @@ def build_optimizer(optimizer: str, model: nn.Module) -> torch.optim.Optimizer:
 
 
 def detach_to_cpu_numpy(tensor):
-    return tensor.view(-1).detach().cpu().numpy()
+    return tensor.detach().cpu().numpy()
 
 
 def get_model_device(model: nn.Module) -> torch.device:

@@ -9,8 +9,10 @@ from typing import Tuple
 from PIL import ImageOps, Image
 
 from toolkit.data.mutli_transform import (DataAugmentationLymphNode,
-                                          AlbumentationsLymphNode)
+                                          DataAugmentationLymphNode1,
+                                          DataAugmentationLymphNode2)
 from toolkit.utils import LOGGER
+
 
 class ResizePadding(object):
     def __init__(self, size):
@@ -40,21 +42,6 @@ class GaussianBlur(transforms.RandomApply):
         keep_p = 1 - p
         transform = transforms.GaussianBlur(kernel_size=9, sigma=(radius_min, radius_max))
         super().__init__(transforms=[transform], p=keep_p)
-
-
-class Solarization(object):
-    """
-    Apply Solarization to the PIL image.
-    """
-
-    def __init__(self, p):
-        self.p = p
-
-    def __call__(self, img):
-        if random.random() < self.p:
-            return ImageOps.solarize(img)
-        else:
-            return img
 
 
 # class DataAugmentationLymphNode(object):
@@ -437,6 +424,21 @@ def create_transform(args, name):
             local_crops_number=args.local_crops_number,
             global_crops_size=args.global_crops_size,
             local_crops_size=args.local_crops_size)
+    elif name == "lymph_node_aug_1":
+        transform = DataAugmentationLymphNode1(
+            global_crops_scale=args.global_crops_scale,
+            local_crops_scale=args.local_crops_scale,
+            local_crops_number=args.local_crops_number,
+            global_crops_size=args.global_crops_size,
+            local_crops_size=args.local_crops_size)
+
+    elif name == "lymph_node_aug_2":
+        transform = DataAugmentationLymphNode2(
+            global_crops_scale=args.global_crops_scale,
+            local_crops_scale=args.local_crops_scale,
+            local_crops_number=args.local_crops_number,
+            global_crops_size=args.global_crops_size,
+            local_crops_size=args.local_crops_size)
 
     elif name == "eval_train":
         transform = transforms.Compose([
@@ -447,11 +449,32 @@ def create_transform(args, name):
             transforms.Grayscale(num_output_channels=3),
             transforms.ToTensor(),
         ])
+    elif name == "eval_train_norm":
+        transform = transforms.Compose([
+            transforms.RandomResizedCrop(size=args.global_crops_size,
+                                         scale=args.global_crops_scale),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomVerticalFlip(),
+            transforms.Grayscale(num_output_channels=3),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=(0.2715, 0.2715, 0.2715),
+                                 std=(0.1834, 0.1834, 0.1834)),
+        ])
+
     elif name == "eval_test":
         transform = transforms.Compose([
             transforms.Resize((224, 224), interpolation=3),
             transforms.Grayscale(num_output_channels=3),
             transforms.ToTensor(),
+        ])
+
+    elif name == "eval_test_norm":
+        transform = transforms.Compose([
+            transforms.Resize((224, 224), interpolation=3),
+            transforms.Grayscale(num_output_channels=3),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=(0.2715, 0.2715, 0.2715),
+                                 std=(0.1834, 0.1834, 0.1834)),
         ])
 
     elif name == "preset_train":

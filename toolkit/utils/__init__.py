@@ -5,6 +5,7 @@ import os
 import platform
 import re
 import argparse
+import warnings
 import subprocess
 import sys
 import tempfile
@@ -36,7 +37,7 @@ VERBOSE = str(os.getenv('YOLO_VERBOSE', True)).lower() == 'true'  # global verbo
 TQDM_BAR_FORMAT = '{l_bar}{bar:10}{r_bar}'  # tqdm bar format
 LOGGING_NAME = 'toolkit'
 MACOS, LINUX, WINDOWS = (platform.system() == x for x in ['Darwin', 'Linux', 'Windows'])  # environment booleans
-
+warnings.filterwarnings("ignore")
 # Settings
 torch.set_printoptions(linewidth=320, precision=4, profile='default')
 np.set_printoptions(linewidth=320, formatter={'float_kind': '{:11.5g}'.format})  # format short g, %precision=5
@@ -44,6 +45,8 @@ cv2.setNumThreads(0)  # prevent OpenCV from multithreading (incompatible with Py
 os.environ['NUMEXPR_MAX_THREADS'] = str(NUM_THREADS)  # NumExpr max threads
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'  # for deterministic training
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # suppress verbose TF compiler warnings in Colab
+
+DEFAULT_CFG_PATH = ROOT / "toolkit" / "cfg" / "args.yaml"
 
 
 class SimpleClass:
@@ -179,6 +182,19 @@ if WINDOWS:  # emoji-safe logging
     LOGGER.addFilter(EmojiFilter())
 
 
+def is_dir_writeable(dir_path: Union[str, Path]) -> bool:
+    """
+    Check if a directory is writeable.
+
+    Args:
+        dir_path (str) or (Path): The path to the directory.
+
+    Returns:
+        bool: True if the directory is writeable, False otherwise.
+    """
+    return os.access(str(dir_path), os.W_OK)
+
+
 def yaml_save(file='data.yaml', data=None):
     """
     Save YAML data to a file.
@@ -239,6 +255,48 @@ def yaml_print(yaml_file: Union[str, Path, dict]) -> None:
     yaml_dict = yaml_load(yaml_file) if isinstance(yaml_file, (str, Path)) else yaml_file
     dump = yaml.dump(yaml_dict, sort_keys=False, allow_unicode=True)
     LOGGER.info(f"Printing '{colorstr('bold', 'black', yaml_file)}'\n\n{dump}")
+
+
+# Default configuration
+DEFAULT_CFG_DICT = yaml_load(DEFAULT_CFG_PATH)
+for k, v in DEFAULT_CFG_DICT.items():
+    if isinstance(v, str) and v.lower() == 'none':
+        DEFAULT_CFG_DICT[k] = None
+DEFAULT_CFG_KEYS = DEFAULT_CFG_DICT.keys()
+DEFAULT_CFG = IterableSimpleNamespace(**DEFAULT_CFG_DICT)
+
+
+def get_user_config_dir(sub_dir='Ultralytics'):
+    """
+    Get the user config directory.
+
+    Args:
+        sub_dir (str): The name of the subdirectory to create.
+
+    Returns:
+        Path: The path to the user config directory.
+    """
+    # Return the appropriate config directory for each operating system
+    if WINDOWS:
+        path = Path.home() / 'AppData' / 'Roaming' / sub_dir
+    elif MACOS:  # macOS
+        path = Path.home() / 'Library' / 'Application Support' / sub_dir
+    elif LINUX:
+        path = Path.home() / '.config' / sub_dir
+    else:
+        raise ValueError(f'Unsupported operating system: {platform.system()}')
+
+    # GCP and AWS lambda fix, only /tmp is writeable
+    if not is_dir_writeable(str(path.parent)):
+        path = Path('/tmp') / sub_dir
+
+    # Create the subdirectory if it does not exist
+    path.mkdir(parents=True, exist_ok=True)
+
+    return path
+
+
+USER_CONFIG_DIR = Path(os.getenv('YOLO_CONFIG_DIR', get_user_config_dir()))  # Ultralytics settings dir
 
 
 def emojis(string=''):
