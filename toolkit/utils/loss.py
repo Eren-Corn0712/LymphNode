@@ -384,7 +384,7 @@ class CARELoss(nn.Module):
 def build_loss(args, device) -> Dict:
     criterion = {}
 
-    if args.use_dense_prediction:
+    if args.use_head_prediction and args.use_dense_prediction is not True:
         # Both view and region level tasks are considered
         criterion["ddino_loss"] = DDINOLoss(
             args.out_dim,
@@ -394,7 +394,8 @@ def build_loss(args, device) -> Dict:
             args.warmup_teacher_temp_epochs,
             args.epochs,
         ).to(device)
-    else:
+
+    if args.use_dense_prediction and args.use_head_prediction is not True:
         # Only view level task is considered
         criterion["dino_loss"] = DINOLoss(
             args.out_dim,

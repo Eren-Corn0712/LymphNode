@@ -14,7 +14,6 @@ from pathlib import Path
 
 from torch import nn
 from torch.utils.data.dataloader import default_collate
-from torchvision.transforms.functional import InterpolationMode
 
 from toolkit.utils import yaml_save, print_options, average_classification_reports
 from toolkit.utils.logger import (MetricLogger, SmoothedValue)
@@ -69,7 +68,7 @@ def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, arg
         acc1, _ = accuracy(output, target, topk=(1, 2))
         batch_size = image.shape[0]
         metric_logger.update(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
-        metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
+        metric_logger.meters["acc1"].update(acc1.item(), num=batch_size)
         # metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
         metric_logger.meters["img/s"].update(batch_size / (time.time() - start_time))
 
@@ -99,7 +98,7 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
 
             batch_size = image.shape[0]
             metric_logger.update(loss=loss.item())
-            metric_logger.meters["acc1"].update(acc1.item(), n=batch_size)
+            metric_logger.meters["acc1"].update(acc1.item(), num=batch_size)
             # metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
             num_processed_samples += batch_size
     # gather the stats from all processes
@@ -149,7 +148,7 @@ def main(args):
 
     device = torch.device(args.device)
     best_results = []
-    k_fold_dataset = KFoldLymphDataset(args.data_path, )
+    k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=5, shuffle=True,random_state=0)
     print(f"Total data : {len(k_fold_dataset)}")
     for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
         # create the folder output
@@ -394,9 +393,9 @@ def get_args_parser(add_help=True):
 
     parser = argparse.ArgumentParser(description="PyTorch Classification Training", add_help=add_help)
 
-    parser.add_argument("--data-path", default=["dataset", "leaf_tumor_video"], help="dataset path", nargs='+')
+    parser.add_argument("--data-path", default=["dataset"], help="dataset path", nargs='+')
     parser.add_argument("--model", default="resnet18", type=str, help="model name")
-    parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
+    parser.add_argument("--device", default="cuda:1", type=str, help="device (Use cuda or cpu Default: cuda)")
     parser.add_argument(
         "-b", "--batch-size", default=256, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
     )
@@ -449,7 +448,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma")
     parser.add_argument("--lr-min", default=1e-6, type=float, help="minimum lr of lr schedule (default: 0.0)")
     parser.add_argument("--print-freq", default=20, type=int, help="print frequency")
-    parser.add_argument("--save-dir", default="runs/sup_debug", type=str, help="path to save outputs")
+    parser.add_argument("--save-dir", default="runs/20230525_suptrain", type=str, help="path to save outputs")
     parser.add_argument("--resume", default="", type=str, help="path of checkpoint")
     parser.add_argument("--start-epoch", default=0, type=int, metavar="N", help="start epoch")
     parser.add_argument(

@@ -82,7 +82,7 @@ class LymphBaseDataset(Dataset, ABC):
 
 
 class KFoldLymphDataset(LymphBaseDataset):
-    def __init__(self, root, transform=None, n_splits=3, shuffle=True, random_state=None):
+    def __init__(self, root, transform=None, n_splits=5, shuffle=True, random_state=None):
         super().__init__(root)
         self.stratified_k_fold = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
         self.transform = transform

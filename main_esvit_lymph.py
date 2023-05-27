@@ -41,6 +41,8 @@ def main(args):
         increment_path(Path(args.project) / args.name, exist_ok=args.exist_ok if is_main_process() else True))
     device = torch.device(args.device)
 
+
+
     if is_main_process():
         # save folder create
         args.save_dir.mkdir(parents=True, exist_ok=True)
@@ -160,6 +162,7 @@ def main(args):
         lowest_loss = sys.float_info.max
         best_w, last_w = fold_save_dir / f'best.pth', fold_save_dir / f'last.pth'
         txt_file = fold_save_dir / "log.txt"
+
         for epoch in range(start_epoch, args.epochs):
             if args.distributed and hasattr(data_loader.sampler, "set_epoch"):
                 data_loader.sampler.set_epoch(epoch)

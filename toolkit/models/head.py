@@ -104,13 +104,14 @@ class MixDINOHead(nn.Module):
             # fea: (2BN + 8Bn), K
             n_sample = cls.shape[0] // batch_size  # 2 or 8
             split_size = patch * batch_size  # BN
-            fea = torch.split(fea, [split_size] * n_sample, dim=0)
-            fea = torch.cat([f.reshape(batch_size, patch, -1) for f in fea], dim=0)
 
             cls = self.global_mlp(cls)
             fea = self.local_mlp(fea)
 
-            x = self.next_to_last(cls[:, None, :] * fea)
+            fea = torch.split(fea, [split_size] * n_sample, dim=0)
+            fea = torch.cat([f.reshape(batch_size, patch, -1) for f in fea], dim=0)
+
+            x = self.next_to_last(cls[:, None, :] + fea)
             x = nn.functional.normalize(x, dim=-1, p=2)
             x = self.last_layer(x)
             batch_size, num_fea, channel = x.shape

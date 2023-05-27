@@ -65,7 +65,9 @@ def create_teacher_student(args):
         raise ValueError(f"Unknown architecture: {args.arch}")
 
     for model in [student, teacher]:
-        if hasattr(args, "out_dim") and hasattr(args, "out_dim") and hasattr(args, "norm_last_layer"):
+        if hasattr(args, "use_head_prediction") and hasattr(args, "out_dim") and \
+                hasattr(args, "use_bn_in_head") and hasattr(args, "norm_last_layer"):
+
             model.head = DINOHead(
                 model.num_features,
                 args.out_dim,
