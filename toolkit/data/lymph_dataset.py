@@ -33,11 +33,14 @@ class LymphBaseDataset(Dataset, ABC):
 
     def info(self):
         count_dict_label = {}
+        count_id_label = {}
         for l in self.labels:
-            count_dict_label.setdefault(l['type_name'], 0)
-            count_dict_label[l['type_name']] += 1
+            count_dict_label[l['type_name']] = count_dict_label.setdefault(l['type_name'], 0) + 1
+            count_id_label[l['patient_id']] = count_id_label.setdefault(l['patient_id'], 0) + 1
 
         print(count_dict_label)
+        print(len(count_id_label.keys()))
+        print(count_id_label)
 
     def get_labels(self, img_path):
         try:
@@ -79,6 +82,9 @@ class LymphBaseDataset(Dataset, ABC):
     @staticmethod
     def find_classes(directory) -> Tuple[List[str], Dict[str, int]]:
         return find_classes(directory)
+
+    def __len__(self):
+        return len(self.labels)
 
 
 class KFoldLymphDataset(LymphBaseDataset):

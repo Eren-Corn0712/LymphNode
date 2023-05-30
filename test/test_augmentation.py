@@ -2,9 +2,9 @@ import torch
 
 from toolkit.data.lymph_dataset import KFoldLymphDataset
 from toolkit.data.mutli_transform import (
-                                        DataAugmentationLymphNode1,
-                                        DataAugmentationLymphNode2)
-from toolkit.utils.plots import show
+    DataAugmentationLymphNode1,
+    DataAugmentationLymphNode2)
+from toolkit.utils.plots import show, make_grid
 
 
 class TestClass(object):
@@ -20,7 +20,7 @@ class TestClass(object):
         dataset = KFoldLymphDataset(["../dataset"], transform)
         for idx, d in enumerate(dataset):
             show(d['img'][:2], name=f"global_{idx}")
-            show(d['img'][2:], name=f"local_{idx}")
+            show(make_grid(d['img'][2:], nrow=4), name=f"local_{idx}")
             if idx == 5:
                 break
 

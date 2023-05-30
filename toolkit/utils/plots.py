@@ -127,3 +127,5 @@ def plot_cam(visualization, save_dir=Path(), patient_id: str = None, disease_typ
     plt.show()
     plt.savefig(save_dir / f"{name}-cam.png")
     plt.close()
+
+

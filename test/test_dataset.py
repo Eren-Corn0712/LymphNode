@@ -5,17 +5,18 @@ from toolkit.data.lymph_dataset import LymphBaseDataset, KFoldLymphDataset
 from pathlib import Path
 from tqdm import tqdm
 
-DIR_DATASET = ["../dataset", "../leaf_tumor_video"]
+DIR_DATASET = ["../dataset"]
 
 
 class TestClass(object):
     def __init__(self):
         pass
 
-    def _test_lymph_dataset(self, *args, **kwargs):
-        LymphBaseDataset(DIR_DATASET)
-
-    def test_k_fold_lymph_dataset(self, *args, **kwargs):
+    def test_lymph_dataset(self, *args, **kwargs):
+        data_set = LymphBaseDataset(DIR_DATASET)
+        print(data_set.info())
+        print(len(data_set))
+    def _test_k_fold_lymph_dataset(self, *args, **kwargs):
         dataset1 = KFoldLymphDataset(DIR_DATASET, random_state=0)
         dataset2 = KFoldLymphDataset(DIR_DATASET, random_state=0)
         z = zip(dataset1.generate_fold_dataset(), dataset2.generate_fold_dataset())
