@@ -1,0 +1,24 @@
+arch: resnet18
+n_last_blocks: 4
+epochs: 1
+pretrained_weights_key: best
+checkpoint_key: teacher
+lr: 0.001
+batch_size_per_gpu: 128
+aug_opt: eval
+global_crops_size: 224
+global_crops_scale:
+  - 0.4
+  - 1.0
+data_path: dataset_debug
+num_labels: 2
+device: cuda:0
+seed: 0
+num_workers: 10
+weighted_sampler: True
+fine_tune: True
+
+project: runs
+name: debug
+exp_name: fine_tune_test
+exist_ok: True
