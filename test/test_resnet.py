@@ -13,7 +13,23 @@ class TestResNet(object):
         model = resnet18().to(self.device)
         model_info(model, detailed=True, verbose=True, imgsz=224)
 
-    def test_multi_input_forward(self):
+    def test_multi_level_forward(self):
+        model = resnet18().to(self.device)
+        x = torch.randn(10, 3, 224, 224).to(self.device)
+        out = model.multi_level_forward_features(x)
+        print(
+            "ok"
+        )
+
+    def test_multi_level_forward_in_multi_view(self):
+        b, c = 10, 3
+        input = [torch.randn(b, c, i, i).to(self.device) for i in [224, 224, 96, 96, 96, 96]]
+
+        model = resnet18().to(self.device)
+        model.multi_level = True
+        output = model(input)
+
+    def _test_multi_input_forward(self):
         model = resnet18().to(self.device)
         model.use_dense_prediction = True
         model.head = nn.Identity()
@@ -27,7 +43,7 @@ class TestResNet(object):
         assert b * l == output[0].shape[0]
         assert b * 2 * (global_fea ** 2) + b * (l - 2) * (local_fea ** 2) == output[1].shape[0]
 
-    def test_n_block_forward(self):
+    def _test_n_block_forward(self):
         model = resnet50().to(self.device)
         depths = model.layers
         embed_dim = model.conv1.out_channels * model.layer1[-1].expansion

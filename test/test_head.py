@@ -2,7 +2,7 @@ import unittest
 
 import torch
 from toolkit.utils.torch_utils import select_device
-from toolkit.models.care import AttnHead
+from toolkit.models.head import DINOHead,MixDINOHead,TransformerHead
 
 
 class TestSwinTransformer(unittest.TestCase):

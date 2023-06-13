@@ -10,6 +10,7 @@ import torch
 import torch.utils.data
 import torchvision
 import torch.distributed
+import numpy as np
 from pathlib import Path
 
 from torch import nn
@@ -21,12 +22,13 @@ from toolkit.utils.dist_utils import (reduce_across_processes, is_main_process, 
 from toolkit.utils.files import mkdir
 from toolkit.utils.torch_utils import (accuracy, ExponentialMovingAverage, set_weight_decay, init_seeds,
                                        detach_to_cpu_numpy)
-from toolkit.utils.python_utils import merge_dict_with_prefix
+from toolkit.utils.python_utils import merge_dict_with_prefix, batch_dataconcat
 from toolkit.data.augmentations import RandomMixup, RandomCutmix
 from toolkit.data.lymph_dataset import KFoldLymphDataset
 from toolkit.data.augmentations import create_transform
+from toolkit.utils.plots import plot_confusion_matrix, plot_txt
 from toolkit.data.sampler import creat_sampler
-
+from eval_linear import case_analysis
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 
 
@@ -66,41 +68,50 @@ def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, arg
                 model_ema.n_averaged.fill_(0)
 
         acc1, _ = accuracy(output, target, topk=(1, 2))
+
         batch_size = image.shape[0]
         metric_logger.update(loss=loss.item(), lr=optimizer.param_groups[0]["lr"])
         metric_logger.meters["acc1"].update(acc1.item(), num=batch_size)
-        # metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
         metric_logger.meters["img/s"].update(batch_size / (time.time() - start_time))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
+@torch.inference_mode()
 def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix=""):
     model.eval()
     metric_logger = MetricLogger(delimiter="  ")
     header = f"Test: {log_suffix}"
 
     num_processed_samples = 0
-    targets, predicts = [], []
-    with torch.inference_mode():
-        for batch in metric_logger.log_every(data_loader, print_freq, header):
-            image = batch['img'].to(device, non_blocking=True)
-            target = batch['label'].to(device, non_blocking=True)
-            output = model(image)
-            loss = criterion(output, target)
+    save_dict = {}
+    for batch in metric_logger.log_every(data_loader, print_freq, header):
+        image = batch['img'].to(device, non_blocking=True)
+        target = batch['label'].to(device, non_blocking=True)
+        output = model(image)
+        loss = criterion(output, target)
 
-            acc1, _ = accuracy(output, target, topk=(1, 2))
+        acc1, _ = accuracy(output, target, topk=(1, 2))
 
-            _, predict = torch.max(output.data, 1)
+        _, predict = torch.max(output.data, 1)
 
-            targets.extend(detach_to_cpu_numpy(target))
-            predicts.extend(detach_to_cpu_numpy(predict))
+        save_dict = batch_dataconcat(
+            save_dict,
+            dict(
+                type_name=batch['type_name'],
+                label=detach_to_cpu_numpy(batch['label'].view(-1)),
+                patient_id=batch['patient_id'],
+                im_file=batch['im_file'],
+                predict=detach_to_cpu_numpy(predict.view(-1)),
+            )
+        )
 
-            batch_size = image.shape[0]
-            metric_logger.update(loss=loss.item())
-            metric_logger.meters["acc1"].update(acc1.item(), num=batch_size)
-            # metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
-            num_processed_samples += batch_size
+        batch_size = image.shape[0]
+        metric_logger.update(loss=loss.item())
+        metric_logger.meters["acc1"].update(acc1.item(), num=batch_size)
+        # metric_logger.meters["acc5"].update(acc5.item(), n=batch_size)
+        num_processed_samples += batch_size
+
     # gather the stats from all processes
 
     num_processed_samples = reduce_across_processes(num_processed_samples)
@@ -122,9 +133,7 @@ def evaluate(model, criterion, data_loader, device, print_freq=100, log_suffix="
     print(f"{header} Acc@1 {metric_logger.acc1.global_avg:.3f}")
 
     states = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    states["targets"] = targets
-    states["predicts"] = predicts
-
+    states['save_dict'] = save_dict
     return states
 
 
@@ -148,7 +157,7 @@ def main(args):
 
     device = torch.device(args.device)
     best_results = []
-    k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=5, shuffle=True,random_state=0)
+    k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=5, shuffle=True, random_state=0)
     print(f"Total data : {len(k_fold_dataset)}")
     for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
         # create the folder output
@@ -324,7 +333,7 @@ def main(args):
             lr_scheduler.step()
             test_stats = evaluate(model, criterion, data_loader_test, device=device)
 
-            exclude = ("targets", "predicts")
+            exclude = ("save_dict",)
             log_stats = merge_dict_with_prefix(log_stats, test_stats, "test_", exclude=exclude)
             log_stats['epoch'] = epoch
 
@@ -349,8 +358,10 @@ def main(args):
 
             save_on_master(checkpoint, fold_save_dir / "last.pth")
 
-            f1 = f1_score(test_stats['targets'], test_stats['predicts'], average='weighted')
             if is_main_process():
+                label = test_stats['save_dict']['label']
+                predict = test_stats['save_dict']['predict']
+                f1 = f1_score(label, predict, average='weighted')
                 if f1 > best_f1:
                     name = train_set.classes
                     best_acc, best_f1 = test_stats["acc1"], f1
@@ -359,24 +370,19 @@ def main(args):
                     save_on_master(checkpoint, fold_save_dir / "best.pth")
 
                     cls_report = classification_report(
-                        test_stats["targets"],
-                        test_stats["predicts"],
-                        target_names=name, output_dict=True)
+                        label,
+                        predict,
+                        labels=np.arange(0, len(name)),
+                        target_names=name,
+                        output_dict=True)
 
+                    # save to csv
                     pd.DataFrame(cls_report).to_csv(fold_save_dir / 'best.csv')
                     best_result = cls_report
 
-                    cm = confusion_matrix(test_stats["targets"],
-                                          test_stats["predicts"])
-
-                    cm = pd.DataFrame(cm, name, name)
-
-                    plt.figure(figsize=(9, 6))
-                    sns.heatmap(cm, annot=True, fmt="d", cmap='BuGn')
-                    plt.xlabel("prediction")
-                    plt.ylabel("label (ground truth)")
-                    plt.savefig(fold_save_dir / "best_confusion_matrix.png")
-                    plt.close()
+                    cm = confusion_matrix(label, predict)
+                    plot_confusion_matrix(cm, name, fold_save_dir)
+                    case_analysis(test_stats['save_dict'], fold_save_dir)
 
         best_results.append(best_result)
         total_time = time.time() - start_time
@@ -393,9 +399,9 @@ def get_args_parser(add_help=True):
 
     parser = argparse.ArgumentParser(description="PyTorch Classification Training", add_help=add_help)
 
-    parser.add_argument("--data-path", default=["dataset"], help="dataset path", nargs='+')
+    parser.add_argument("--data-path", default=["dataset_clean"], help="dataset path", nargs='+')
     parser.add_argument("--model", default="resnet18", type=str, help="model name")
-    parser.add_argument("--device", default="cuda:1", type=str, help="device (Use cuda or cpu Default: cuda)")
+    parser.add_argument("--device", default="cuda:0", type=str, help="device (Use cuda or cpu Default: cuda)")
     parser.add_argument(
         "-b", "--batch-size", default=256, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
     )
@@ -448,7 +454,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma")
     parser.add_argument("--lr-min", default=1e-6, type=float, help="minimum lr of lr schedule (default: 0.0)")
     parser.add_argument("--print-freq", default=20, type=int, help="print frequency")
-    parser.add_argument("--save-dir", default="runs/20230525_suptrain", type=str, help="path to save outputs")
+    parser.add_argument("--save-dir", default="runs/20230531_suptrain", type=str, help="path to save outputs")
     parser.add_argument("--resume", default="", type=str, help="path of checkpoint")
     parser.add_argument("--start-epoch", default=0, type=int, metavar="N", help="start epoch")
     parser.add_argument(

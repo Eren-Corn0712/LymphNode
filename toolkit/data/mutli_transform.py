@@ -375,7 +375,13 @@ class AlbumentationsLymphNode(MultiDataAugmentation, metaclass=ABCMeta):
                     scale=global_crops_scale,
                     ratio=(1.0, 1.0)
                 ),
-                A.ElasticTransform(p=1.0)
+                A.SomeOf([
+                    A.Transpose(p=1.0),
+                    A.HorizontalFlip(p=1.0),
+                    A.VerticalFlip(p=1.0),
+                    A.RandomRotate90(p=1.0),
+                ],
+                    n=2)
             ]
         )
 
@@ -387,15 +393,21 @@ class AlbumentationsLymphNode(MultiDataAugmentation, metaclass=ABCMeta):
                     scale=local_crops_scale,
                     ratio=(1.0, 1.0)
                 ),
-                A.OneOf([
-                    A.Rotate(
-                        limit=(-180, 180),
-                        interpolation=2,
-                        border_mode=0,
-                    ),
-                    A.GridDistortion()
-                ])
+                A.SomeOf([
+                    A.Transpose(p=1.0),
+                    A.HorizontalFlip(p=1.0),
+                    A.VerticalFlip(p=1.0),
+                    A.RandomRotate90(p=1.0)
+                ],
+                    n=2)
             ]
+        )
+
+        non_grid_trans = A.OneOf(
+            [A.ElasticTransform(p=1, alpha=120, sigma=120 * 0.05, alpha_affine=120 * 0.03),
+             A.GridDistortion(p=1),
+             A.OpticalDistortion(distort_limit=(-0.05, 0.05), shift_limit=(-0.05, 0.05), p=1)
+             ]
         )
 
         color_jitter = A.ColorJitter(
@@ -410,6 +422,108 @@ class AlbumentationsLymphNode(MultiDataAugmentation, metaclass=ABCMeta):
                 A.GaussianBlur(p=0.1),
             ]
         )
+        local_trans_extra = A.GaussianBlur(p=0.5)
+        normalize = A.Compose(
+            [
+                A_P.ToTensorV2(),
+            ]
+        )
+        self.global_trans1 = A.Compose([non_grid_trans, color_jitter, global_trans1_extra, normalize])
+        self.global_trans2 = A.Compose([non_grid_trans, color_jitter, global_trans2_extra, normalize])
+        self.local_trans = A.Compose([non_grid_trans, color_jitter, local_trans_extra, normalize])
+
+    def __call__(self, image):
+        image = np.asarray(image)  # pil to numpy
+        output = []
+        geo_image1, geo_image2 = (
+            self.geometric_augmentation_global(image=image) for _ in range(2)
+        )
+        global_1 = self.global_trans1(image=geo_image1['image'])['image']
+        global_2 = self.global_trans2(image=geo_image2['image'])['image']
+
+        output.extend((global_1, global_2))
+
+        output.extend(
+            (
+                self.local_trans(
+                    image=self.geometric_augmentation_local(
+                        image=image
+                    )['image']
+                )['image'] for _ in range(self.local_crops_number)
+            )
+        )
+        output = [x.float() / 255.0 for x in output]
+        return [x.repeat(3, 1, 1) if x.shape[0] == 1 else x for x in output]
+
+
+class AlbumentationsLymphNode1(MultiDataAugmentation, metaclass=ABCMeta):
+    def __init__(
+            self,
+            global_crops_scale,
+            local_crops_scale,
+            local_crops_number,
+            global_crops_size=224,
+            local_crops_size=96,
+    ):
+        super().__init__(
+            global_crops_scale,
+            local_crops_scale,
+            local_crops_number,
+            global_crops_size,
+            local_crops_size,
+        )
+        prefix = colorstr('albumentations: ')
+
+        self.geometric_augmentation_global = A.Compose(
+            [
+                A.RandomResizedCrop(
+                    height=global_crops_size,
+                    width=global_crops_size,
+                    scale=global_crops_scale,
+                    ratio=(1.0, 1.0)
+                ),
+                A.SomeOf([
+                    A.Transpose(p=1.0),
+                    A.HorizontalFlip(p=1.0),
+                    A.VerticalFlip(p=1.0),
+                    A.RandomRotate90(p=1.0),
+                ],
+                    n=2)
+            ]
+        )
+
+        self.geometric_augmentation_local = A.Compose(
+            [
+                A.RandomResizedCrop(
+                    height=local_crops_size,
+                    width=local_crops_size,
+                    scale=local_crops_scale,
+                    ratio=(1.0, 1.0)
+                ),
+                A.SomeOf([
+                    A.Transpose(p=1.0),
+                    A.HorizontalFlip(p=1.0),
+                    A.VerticalFlip(p=1.0),
+                    A.RandomRotate90(p=1.0)
+                ],
+                    n=2)
+            ]
+        )
+
+        color_jitter = A.ColorJitter(
+            brightness=0.5, contrast=0.5, saturation=0.0, hue=0.0, p=0.8)
+
+        global_trans1_extra = A.Compose(
+            [A.GaussianBlur(p=1.0),
+             ]
+        )
+
+        global_trans2_extra = A.Compose(
+            [
+                A.GaussianBlur(p=0.1),
+            ]
+        )
+
         local_trans_extra = A.GaussianBlur(p=0.5)
         normalize = A.Compose(
             [
@@ -440,5 +554,5 @@ class AlbumentationsLymphNode(MultiDataAugmentation, metaclass=ABCMeta):
                 )['image'] for _ in range(self.local_crops_number)
             )
         )
-
+        output = [x.float() / 255.0 for x in output]
         return [x.repeat(3, 1, 1) if x.shape[0] == 1 else x for x in output]

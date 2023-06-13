@@ -147,6 +147,7 @@ class KFoldLymphDataset(LymphBaseDataset):
         label = self.labels[item].copy()
         label['im_file'] = str(label['im_file'])
         label['img'] = pil_loader(label['im_file'])
+        label['idx'] = item
         if self.transform:
             label['img'] = self.transform(label['img'])
         return label
@@ -164,6 +165,7 @@ class WrapperFoldDataset(Dataset):
         label = self.samples[item].copy()
         label['im_file'] = str(label['im_file'])
         label['img'] = pil_loader(label['im_file'])
+        label['idx'] = item
         if self.transform:
             label['img'] = self.transform(label['img'])
         return label

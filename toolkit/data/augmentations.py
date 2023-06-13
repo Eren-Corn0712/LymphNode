@@ -10,7 +10,9 @@ from PIL import ImageOps, Image
 
 from toolkit.data.mutli_transform import (DataAugmentationLymphNode,
                                           DataAugmentationLymphNode1,
-                                          DataAugmentationLymphNode2)
+                                          DataAugmentationLymphNode2,
+                                          AlbumentationsLymphNode,
+                                          AlbumentationsLymphNode1)
 from toolkit.utils import LOGGER
 
 
@@ -431,6 +433,23 @@ def create_transform(args, name):
             local_crops_number=args.local_crops_number,
             global_crops_size=args.global_crops_size,
             local_crops_size=args.local_crops_size)
+
+    elif name == "lymph_node_aug_A":
+        transform = AlbumentationsLymphNode(
+            global_crops_scale=args.global_crops_scale,
+            local_crops_scale=args.local_crops_scale,
+            local_crops_number=args.local_crops_number,
+            global_crops_size=args.global_crops_size,
+            local_crops_size=args.local_crops_size
+        )
+    elif name == "lymph_node_aug_A1":
+        transform = AlbumentationsLymphNode1(
+            global_crops_scale=args.global_crops_scale,
+            local_crops_scale=args.local_crops_scale,
+            local_crops_number=args.local_crops_number,
+            global_crops_size=args.global_crops_size,
+            local_crops_size=args.local_crops_size
+        )
 
     elif name == "lymph_node_aug_2":
         transform = DataAugmentationLymphNode2(

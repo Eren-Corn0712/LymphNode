@@ -13,8 +13,9 @@ seed: 0
 num_workers: 10
 
 # Augmentation settings ------------------------------------------------------------------------------------------------
-data_path: dataset
+data_path: dataset_clean
 aug_opt: eval
+n_splits: 5
 global_crops_size: 224
 global_crops_scale:
   - 0.75
@@ -24,7 +25,11 @@ fine_tune: True
 
 
 # Save file settings ----------------------------------------------------------------------------------------------------
-project: runs
-name: 20230527_DINO_2048
+project: runs_esvit
+name: 20230603_DINO_2048_AugA
 exp_name: best_linear_fine_tune
 exist_ok: True
+
+
+# Logging -------------------------------------
+wandb: True

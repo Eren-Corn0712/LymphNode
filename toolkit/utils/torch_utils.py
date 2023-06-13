@@ -355,10 +355,10 @@ def load_pretrained_weights(model, pretrained_weights, checkpoint_key):
         LOGGER.info(colorstr("There is no reference weights available for this model => We use random weights."))
 
 
-def load_pretrained_linear_weights(model, pretrained_weights):
+def load_pretrained_linear_weights(model, pretrained_weights, key='linear_classifier'):
     if os.path.isfile(pretrained_weights):
         state_dict = torch.load(pretrained_weights, map_location="cpu")
-        msg = model.load_state_dict(state_dict['state_dict'], strict=True)
+        msg = model.load_state_dict(state_dict[f'{key}'], strict=False)
         LOGGER.info(colorstr('Pretrained weights found at {} and loaded with msg: {}'.format(pretrained_weights, msg)))
     else:
         LOGGER.info(

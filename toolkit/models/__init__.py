@@ -1,7 +1,8 @@
 import toolkit.models.swin_transformer as swin_transformer
 import toolkit.models.resnet as resnet
 
-from toolkit.models.head import DINOHead, MixDINOHead, LinearClassifier
+from toolkit.models.head import DINOHead, MixDINOHead, LinearClassifier, TransformerHead, MultiLevelHead
+
 from toolkit.models.care import AttnHead
 from toolkit.utils import LOGGER
 
@@ -65,9 +66,7 @@ def create_teacher_student(args):
         raise ValueError(f"Unknown architecture: {args.arch}")
 
     for model in [student, teacher]:
-        if hasattr(args, "use_head_prediction") and hasattr(args, "out_dim") and \
-                hasattr(args, "use_bn_in_head") and hasattr(args, "norm_last_layer"):
-
+        if hasattr(args, "use_head_prediction") and args.use_head_prediction:
             model.head = DINOHead(
                 model.num_features,
                 args.out_dim,
@@ -86,6 +85,26 @@ def create_teacher_student(args):
             setattr(model, "use_mix_prediction", args.use_mix_prediction)
             model.mix_head = MixDINOHead(
                 model.num_features,
+                args.out_dim,
+                use_bn=args.use_bn_in_head,
+                norm_last_layer=args.norm_last_layer
+            )
+        if hasattr(args, "use_trans_prediction") and args.use_trans_prediction:
+            setattr(model, "use_trans_prediction", args.use_trans_prediction)
+            model.trans_head = TransformerHead(
+                model.num_features,
+                args.out_dim,
+                use_bn=args.use_bn_in_head,
+                norm_last_layer=args.norm_last_layer,
+            )
+        if hasattr(args, "use_multi_level") and args.use_multi_level:
+            setattr(model, "use_multi_level", args.use_multi_level)
+            # only support for resnet18
+            model.multi_head = MultiLevelHead(
+                [model.layer1[-1].conv2.out_channels,
+                 model.layer2[-1].conv2.out_channels,
+                 model.layer3[-1].conv2.out_channels,
+                 model.layer4[-1].conv2.out_channels],
                 args.out_dim,
                 use_bn=args.use_bn_in_head,
                 norm_last_layer=args.norm_last_layer

@@ -28,10 +28,11 @@ pathlib.PosixPath = pathlib.WindowsPath
 def get_args_parser():
     parser = argparse.ArgumentParser("CAM", add_help=False)
 
-    parser.add_argument('--data_path', default=['dataset'], type=str,
+    parser.add_argument('--data_path', default=['dataset_clean'], type=str,
                         nargs='+', help='Please specify path to the ImageNet training data.')
-    parser.add_argument('--backbone_yaml', default="runs/20230525_DINO/args.yaml", type=str)
-    parser.add_argument('--downstream_yaml', default="runs/20230525_DINO/args_eval_linear.yaml", type=str)
+    parser.add_argument('--backbone_yaml', default="runs_esvit/20230602_DINO_1024/args.yaml", type=str)
+    parser.add_argument('--downstream_yaml', default="runs_esvit/20230602_DINO_1024/args_best_linear_fine_tune.yaml",
+                        type=str)
     return parser
 
 
@@ -72,7 +73,7 @@ def main_cam(args):
 
     k_fold_dataset = KFoldLymphDataset(backbone_args.data_path, n_splits=5, shuffle=True,
                                        random_state=backbone_args.seed)
-    idx_to_class = {v: k for k, v in k_fold_dataset.class_to_idx.items()}
+    idx_to_class = {v: k[0] for k, v in k_fold_dataset.class_to_idx.items()}
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 1
@@ -85,7 +86,11 @@ def main_cam(args):
         # TO DO: Modfiy this name
         fold_linear_path = (fold_path / downstream_yaml.exp_name / "best").with_suffix(".pth")
 
-        load_pretrained_weights(cam_model.model, str(fold_model_path), checkpoint_key="teacher")
+        if downstream_yaml.fine_tune:
+            load_pretrained_linear_weights(cam_model.model, str(fold_linear_path), key='model')
+        else:
+            load_pretrained_weights(cam_model.model, str(fold_model_path), checkpoint_key="teacher")
+
         load_pretrained_linear_weights(cam_model.linear, str(fold_linear_path))
 
         if downstream_yaml.aug_opt == "eval":
@@ -110,7 +115,6 @@ def main_cam(args):
             output = cam_model(inp[None, ...].cuda())
             grayscale_cam = cam(input_tensor=inp[None, ...], targets=targets)
 
-            print(output)
             _, pred = torch.max(output.data, 1)
             pred = pred.view(-1).item()
             np_inp = inp.numpy().transpose(1, 2, 0)
@@ -122,7 +126,7 @@ def main_cam(args):
             semantic_inp = np.where(semantic_inp, 255, 0).astype(np.uint8)
             visualization = show_cam_on_image(np_inp,
                                               grayscale_cam,
-                                              use_rgb=True)
+                                              use_rgb=False)
 
             result = np.hstack((to_uint8(np_inp), visualization, semantic_inp))
             padding_size = 100
@@ -133,13 +137,15 @@ def main_cam(args):
             save_path.mkdir(parents=True, exist_ok=True)
 
             key = f"{data['type_name']}-{data['patient_id']}"
-            fps, w, h = 12, result_padded.shape[1], result_padded.shape[0]
+            fps, w, h = 5, result_padded.shape[1], result_padded.shape[0]
+
             if key not in vid_writer:
-                save_path = save_path / "LayerCAM"
-                save_path = str(Path(save_path).with_suffix('.mp4'))  # force *.mp4 suffix on results videos
-                vid_writer[key] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+                save_path = Path(save_path / "LayerCAM").with_suffix('.mp4')  # force *.mp4 suffix on results videos
+                vid_writer[key] = cv2.VideoWriter(str(save_path), cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+                if save_path.exists():
+                    print(save_path.resolve())
             else:
-                text = f"ID:{data['patient_id']}-label:{data['type_name']}-pred:{idx_to_class[pred]}"
+                text = f"ID:{data['patient_id']}-label:{data['type_name'][0]}-pred:{idx_to_class[pred]}"
                 text_size, _ = cv2.getTextSize(text, font, font_scale, thickness)
 
                 text_x = (result_padded.shape[1] - text_size[0]) // 2  # 水平居中

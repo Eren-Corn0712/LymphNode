@@ -34,6 +34,8 @@ from toolkit.utils.logger import (MetricLogger, SmoothedValue)
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from toolkit.utils.files import (increment_path)
 
+import wandb
+
 
 def main(args):
     init_distributed_mode(args)
@@ -41,7 +43,6 @@ def main(args):
     args.save_dir = Path(
         increment_path(Path(args.project) / args.name, exist_ok=args.exist_ok if is_main_process() else True))
     device = torch.device(args.device)
-    print_options(args)
 
     if is_main_process():
         # save folder create
@@ -54,6 +55,14 @@ def main(args):
     k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=5, shuffle=True, random_state=args.seed)
     for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
         # ============ K Folder training start  ... ============
+
+        # ============ wandb run ========
+        # Logger
+        if args.wandb:
+            # args.project always is runs/
+            wandb.init(project=args.project, name=args.exp_name, config=vars(args),
+                       group=str(args.save_dir), job_type=f"{k + 1}_eval",
+                       dir=args.save_dir)
 
         if args.aug_opt == "eval":
             train_set.transform = create_transform(args, "eval_train")
@@ -119,13 +128,18 @@ def main(args):
                 save_dir.mkdir(parents=True, exist_ok=True)
 
         to_restore = {"epoch": 0, "best_acc": 0.}
-        restart_from_checkpoint(
-            save_dir / "last.pth",
+
+        kwarg = dict(
             run_variables=to_restore,
             linear_classifier=linear_classifier,
-            model=model,
             optimizer=optimizer,
             scheduler=scheduler,
+        )
+        if args.fine_tune:
+            kwarg['model'] = model
+        restart_from_checkpoint(
+            ckp_path=save_dir / "last.pth",
+            **kwarg,
         )
         start_epoch = to_restore["epoch"]
         best_acc = to_restore["best_acc"]
@@ -169,23 +183,22 @@ def main(args):
 
             LOGGER.info(f"Accuracy at epoch {epoch} test images: {test_stats['acc1']:.1f}%")
 
-            for key in log_stats:
-                if isinstance(log_stats[key], float):
-                    log_stats[key] = "{:.6f}".format(round(log_stats[key], 6))
-
             if is_main_process():
                 with txt_file.open("a") as f:
                     f.write(json.dumps(log_stats) + "\n")
+                if args.wandb:
+                    wandb.log(log_stats)
 
-            save_dict = {
-                "epoch": epoch + 1,
-                "linear_classifier": de_parallel(linear_classifier).state_dict(),
-                "model": de_parallel(model).state_dict() if args.fine_tune else None,
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
-                "best_acc": best_acc,
-                "best_f1": best_f1
-            }
+            save_dict = dict(
+                epoch=epoch + 1,
+                linear_classifier=de_parallel(linear_classifier).state_dict(),
+                optimizer=optimizer.state_dict(),
+                scheduler=scheduler.state_dict(),
+                best_acc=best_acc,
+                best_f1=best_f1,
+            )
+            if args.fine_tune:
+                save_dict["model"] = de_parallel(model).state_dict()
 
             save_on_master(save_dict, last_w)
 
@@ -195,7 +208,9 @@ def main(args):
                 predict = test_stats['save_dict']['predict']
                 f1 = f1_score(label, predict, average='weighted')
                 if f1 > best_f1:
+                    # get classes name
                     name = train_loader.dataset.classes
+
                     best_acc, best_f1 = test_stats["acc1"], f1
                     LOGGER.info(f'Max accuracy so far: {best_acc:.4f}% F1-Score: {f1:.4f}')
 
@@ -209,27 +224,40 @@ def main(args):
                         output_dict=True)
 
                     # save to csv
-                    pd.DataFrame(cls_report).to_csv(save_dir / 'best.csv')
+                    pd_cls_report = pd.DataFrame(cls_report)
+                    pd_cls_report.to_csv(save_dir / 'best.csv')  # save to csv
                     best_result = cls_report
 
                     cm = confusion_matrix(label, predict)
                     plot_confusion_matrix(cm, name, save_dir)
                     case_analysis(test_stats['save_dict'], save_dir)
 
+                    if args.wandb:
+                        wandb.sklearn.plot_confusion_matrix(label, predict, name)
+                        wandb.run.summary["best_accuracy"] = cls_report["accuracy"]
+                        wandb.run.summary["best_f1"] = cls_report["weighted avg"]["f1-score"]
+                        wandb.run.summary["sensitivity"] = cls_report["Malignant"]["recall"]
+                        wandb.run.summary["specificity"] = cls_report["Benign"]["recall"]
+
             del save_dict
 
-        # Plot loss
-        if is_main_process():
-            plot_txt(txt_file, keyword="acc", save_dir=save_dir, name="result")
+        # Plot acc
 
         LOGGER.info("Training of the supervised linear classifier on frozen features completed.\n"
                     "Top-1 test accuracy: {acc:.1f}".format(acc=best_acc))
         if best_result:
             best_results.append(best_result)
 
+        if is_main_process():
+            if args.wandb:
+                wandb.finish()
+            # plot_txt(txt_file, keyword="acc", save_dir=save_dir, name="result")
+
     if is_main_process():
         reports = average_classification_reports(best_results)
         yaml_save(args.save_dir / f"report_{args.exp_name}.yaml", reports)
+
+    torch.cuda.empty_cache()
 
 
 def train(args, model, linear_classifier, optimizer, loader, epoch, n, depths):

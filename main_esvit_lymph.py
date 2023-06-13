@@ -32,6 +32,8 @@ from toolkit.utils.loss import build_loss
 from toolkit.utils.plots import (show, plot_txt)
 from pathlib import Path
 
+import wandb
+
 
 def main(args):
     # Setting the distributed training
@@ -41,8 +43,6 @@ def main(args):
         increment_path(Path(args.project) / args.name, exist_ok=args.exist_ok if is_main_process() else True))
     device = torch.device(args.device)
 
-
-
     if is_main_process():
         # save folder create
         args.save_dir.mkdir(parents=True, exist_ok=True)
@@ -51,12 +51,20 @@ def main(args):
         print_options(args)
 
     # ============ preparing data ... ============
-    k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=5, shuffle=True, random_state=args.seed)
+    k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=args.n_splits, shuffle=True, random_state=args.seed)
 
     for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
         # ============ K Folder training start  ... ============
 
-        # transformation for multi-crop 
+        # ============ wandb run ========
+        # Logger
+        if args.wandb:
+            # args.project always is runs/
+            wandb.init(project=args.project, name=args.name, config=vars(args),
+                       group=str(args.save_dir), job_type=f"{k + 1}_backbone",
+                       dir=args.save_dir)
+
+        # transformation for multi-crop
         train_set.transform = create_transform(args, args.aug_opt)
 
         # create sampler
@@ -205,25 +213,16 @@ def main(args):
             log_stats = merge_dict_with_prefix({}, train_stats, "train_")
             log_stats["epoch"] = epoch
 
-            for key in log_stats:
-                if isinstance(log_stats[key], float):
-                    log_stats[key] = "{:.6f}".format(round(log_stats[key], 6))
-
             if is_main_process():
                 with txt_file.open("a") as f:
                     f.write(json.dumps(log_stats) + "\n")
-                plot_txt(txt_file, keyword="loss", save_dir=fold_save_dir, name="result")
+                # plot_txt(txt_file, keyword="loss", save_dir=fold_save_dir, name="result")
 
-            # features, labels = get_features(val_loader,
-            #                                 teacher,
-            #                                 args.n_last_blocks,
-            #                                 args.avgpool_patchtokens,
-            #                                 config.MODEL.SPEC['DEPTHS'])
-            #
-            # tsne = TSNE(n_components=2, init='pca', learning_rate='auto').fit_transform(features)
-            # tsne_plot(tsne, labels, fold_output_dir, epoch)
-            # tsne_video(fold_output_dir, fold_output_dir)
-            # del tsne, features, labels, save_dict, train_stats, log_stats,
+                if args.wandb:
+                    wandb.log(log_stats)
+
+        if args.wandb:
+            wandb.finish()
     torch.cuda.empty_cache()
 
 
@@ -291,9 +290,9 @@ def train_one_epoch(
 
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(scaler is not None), torch.backends.cuda.sdp_kernel(enable_flash=False):
+            student_output = student(student_input)
             with torch.no_grad():
                 teacher_output = teacher(teacher_input)  # only the 2 global views pass through the teacher
-            student_output = student(student_input)
             total_loss = torch.zeros(1, device=device)
             total_items = {}
             for loss_key, loss_fun in criterion.items():
@@ -335,6 +334,31 @@ def train_one_epoch(
                     total_loss += loss
                     total_items = {**total_items, **loss_items}
 
+                if loss_key == "trans_loss":
+                    loss, loss_items = loss_fun(
+                        s_trans_output=student_output["trans_head"],
+                        s_fea=student_output["output_fea"],
+                        s_npatch=student_output["num_patch"],
+                        t_trans_output=teacher_output["trans_head"],
+                        t_fea=teacher_output["output_fea"],
+                        t_npatch=teacher_output["num_patch"],
+                        epoch=epoch
+                    )
+                    total_loss += loss
+                    total_items = {**total_items, **loss_items}
+                if loss_key == "multi_level_loss":
+                    loss, loss_items = loss_fun(
+                        s_multi_level_region_out=student_output["multi_level"],
+                        s_multi_level_fea=student_output["output_fea"],
+                        s_multi_level_npatch=student_output["num_patch"],
+                        t_multi_level_region_out=teacher_output["multi_level"],
+                        t_multi_level_fea=teacher_output["output_fea"],
+                        t_multi_level_npatch=teacher_output["num_patch"],
+                        epoch=epoch
+                    )
+                    total_loss += loss
+                    total_items = {**total_items, **loss_items}
+
         if not math.isfinite(total_loss.item()):
             LOGGER.info("Loss is {}, stopping training".format(total_loss.item()))
             # ============ writing logs on a NaN for debug ... ============
@@ -370,9 +394,12 @@ def train_one_epoch(
         # EMA update for the teacher
         with torch.no_grad():
             m = momentum_schedule[it]  # momentum parameter
-            for name, param_q in de_parallel(student).named_parameters():
-                param_k = de_parallel(teacher).state_dict()[name]
-                param_k.mul_(m).add_((1 - m) * param_q.detach())
+            de_teacher = de_parallel(teacher)
+            de_student = de_parallel(student)
+            for name, param_q in de_student.named_parameters():
+                if name in de_teacher.state_dict():
+                    param_k = de_teacher.state_dict()[name]
+                    param_k.mul_(m).add_((1 - m) * param_q.detach())
 
         # Logging
         time_sync()

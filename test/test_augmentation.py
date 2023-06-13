@@ -3,7 +3,9 @@ import torch
 from toolkit.data.lymph_dataset import KFoldLymphDataset
 from toolkit.data.mutli_transform import (
     DataAugmentationLymphNode1,
-    DataAugmentationLymphNode2)
+    DataAugmentationLymphNode2,
+    AlbumentationsLymphNode,
+    AlbumentationsLymphNode1)
 from toolkit.utils.plots import show, make_grid
 
 
@@ -12,12 +14,12 @@ class TestClass(object):
         pass
 
     def test_mutil_crop_aug(self):
-        transform = DataAugmentationLymphNode1(global_crops_scale=(0.95, 1.0),
-                                               local_crops_scale=(0.5, 0.75),
-                                               local_crops_number=8,
-                                               local_crops_size=96,
-                                               global_crops_size=224)
-        dataset = KFoldLymphDataset(["../dataset"], transform)
+        transform = AlbumentationsLymphNode1(global_crops_scale=(0.75, 1.0),
+                                             local_crops_scale=(0.5, 0.75),
+                                             local_crops_number=8,
+                                             local_crops_size=96,
+                                             global_crops_size=224)
+        dataset = KFoldLymphDataset(["../dataset_debug"], transform)
         for idx, d in enumerate(dataset):
             show(d['img'][:2], name=f"global_{idx}")
             show(make_grid(d['img'][2:], nrow=4), name=f"local_{idx}")
