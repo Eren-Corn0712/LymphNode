@@ -388,22 +388,10 @@ def clip_gradients(model, clip):
 
 def model_info(model, detailed=False, verbose=True, imgsz=224):
     # Model information. imgsz may be int or list, i.e. imgsz=640 or imgsz=[640, 320]
-    if not verbose:
-        return
-    n_p = get_num_params(model)
-    n_g = get_num_gradients(model)  # number gradients
-    if detailed:
-        LOGGER.info(
-            f"{'layer':>5} {'name':>40} {'gradient':>9} {'parameters':>12} {'shape':>20} {'mu':>10} {'sigma':>10}")
-        for i, (name, p) in enumerate(model.named_parameters()):
-            name = name.replace('module_list.', '')
-            LOGGER.info('%5g %40s %9s %12g %20s %10.3g %10.3g' %
-                        (i, name, p.requires_grad, p.numel(), list(p.shape), p.mean(), p.std()))
-
+    params = get_num_params(model)
+    gradients = get_num_gradients(model)
     flops = get_flops(model, imgsz)
-    fs = f', {flops:.1f} GFLOPs' if flops else ''
-    m = getattr(model, 'name', " ") or 'Model'
-    LOGGER.info(f'{m} summary : {len(list(model.modules()))} layers, {n_p} parameters, {n_g} gradients{fs}')
+    LOGGER.info(f"{model.__class__} params:{params} gradients:{gradients} flops:{flops}")
 
 
 def get_num_params(model):

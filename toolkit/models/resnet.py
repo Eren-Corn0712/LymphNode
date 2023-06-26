@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models.resnet import ResNet, Bottleneck, BasicBlock
 from einops import rearrange, repeat
+from toolkit.models.head import (CrossLevelHead, SelfRelationHeadV2)
 
 __all__ = ["resnet18", "resnet34", "resnet50"]
 
@@ -10,6 +11,7 @@ __all__ = ["resnet18", "resnet34", "resnet50"]
 def bchw2bhwc(x):
     h, w = x.shape[-2:]
     return rearrange(x, 'b c h w -> b (h w) c', h=h, w=w)
+
 
 class ResnetWrapper(ResNet):
     def __init__(self, name, *args, **kwargs):
@@ -66,12 +68,13 @@ class ResnetWrapper(ResNet):
             output["output_fea"] = torch.cat(output_fea)
             output["num_patch"] = num_patch
             return output
-        else:
+
+        elif hasattr(self, "use_multi_level") and self.use_multi_level:
             num_patch = [[] for _ in range(4)]  # [layer1, layer2, ...]
-            output_fea = [[] for _ in range(4)] # [layer1, layer2, ...]
+            output_fea = [[] for _ in range(4)]  # [layer1, layer2, ...]
 
             for start_idx, end_idx in zip([0] + idx_crops[:-1].tolist(), idx_crops.tolist()):
-                out = self.multi_level_forward_features(torch.cat(x[start_idx: end_idx]))
+                out = self.multi_level_forward_features_w_pool(torch.cat(x[start_idx: end_idx]))
                 for i, o in enumerate(out):
                     batch_size, patch, channel = o.shape
                     num_patch[i].append(patch)
@@ -87,6 +90,38 @@ class ResnetWrapper(ResNet):
             output['output_fea'] = output_fea
             return output
 
+        elif hasattr(self, "use_corr") and self.use_corr:
+            output = {}
+
+            batch_size = x[0].shape[0]
+            # if feat len is 1 only contain global view
+            # if feat len is 2 contain global and local
+            # Multi-View Forward
+            for start_idx, end_idx in zip([0] + idx_crops[:-1].tolist(), idx_crops.tolist()):
+                # [layer1, layer2, layer3, layer4]
+                # layer x : [a,b,c,d]
+                ml_feat = self.multi_level_forward_features(torch.cat(x[start_idx: end_idx]))
+                chunk_size = end_idx - start_idx
+                if hasattr(self, "corr_head"):
+                    if isinstance(self.corr_head, (CrossLevelHead, SelfRelationHeadV2)):
+                        layers_output = self.corr_head(ml_feat)
+                        for layer_idx, layer_output in enumerate(layers_output):
+                            if layer_idx not in output.keys():
+                                output[layer_idx] = {}
+
+                            out1, out2 = layer_output
+                            out1 = out1.chunk(chunk_size)  # view1, view2
+                            out2 = out2.chunk(chunk_size)
+                            for view_idx, (m, n) in enumerate(zip(out1, out2)):
+                                output[layer_idx][start_idx + view_idx] = [m, n]
+
+                    else:
+                        raise ValueError(f"Not support for this {type(self.corr_head)}")
+
+            return output
+        else:
+            raise ValueError("Not Support this type forward")
+
     def forward_features(self, x):
         x_region = self.forward_feature_map(x)
         x = self.avgpool(x_region)
@@ -96,22 +131,15 @@ class ResnetWrapper(ResNet):
         return x, bchw2bhwc(x_region)
 
     def forward_feature_map(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-
+        x = self.forward_stem(x)
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
         return x
 
-    def multi_level_forward_features(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
+    def multi_level_forward_features_w_pool(self, x):
+        x = self.forward_stem(x)
 
         out = []
         for pool_size, layer in zip((8, 4, 2, 1), (self.layer1, self.layer2, self.layer3, self.layer4)):
@@ -120,17 +148,27 @@ class ResnetWrapper(ResNet):
             out.append(bchw2bhwc(pool_x))
         return out
 
+    def multi_level_forward_features(self, x):
+        x = self.forward_stem(x)
+        out = []
+        for layer in (self.layer1, self.layer2, self.layer3, self.layer4):
+            x = layer(x)
+            out.append(x)
+        return out
 
+    def forward_stem(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+        return x
 
     def forward_return_n_last_blocks(self, x, n, depths):
         output = []
         all_depths = sum(depths)
         block_idx = all_depths - n
         # stage 1 forward
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
+        x = self.forward_stem(x)
 
         # layer1 to 4 decomposition
         layers = [getattr(self, f"layer{i}") for i in range(1, 5)]

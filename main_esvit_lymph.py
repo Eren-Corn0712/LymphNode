@@ -285,8 +285,12 @@ def train_one_epoch(
         images = [im.to(device, non_blocking=True) for im in batch['img']]
 
         # teacher and student input
-        teacher_input = images[:2]
-        student_input = images
+        if hasattr(args, "use_corr") and args.use_corr:
+            teacher_input = images
+            student_input = images
+        else:
+            teacher_input = images[:2]
+            student_input = images
 
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(scaler is not None), torch.backends.cuda.sdp_kernel(enable_flash=False):
@@ -355,6 +359,14 @@ def train_one_epoch(
                         t_multi_level_fea=teacher_output["output_fea"],
                         t_multi_level_npatch=teacher_output["num_patch"],
                         epoch=epoch
+                    )
+                    total_loss += loss
+                    total_items = {**total_items, **loss_items}
+                if loss_key == "cross_loss":
+                    loss, loss_items = loss_fun(
+                        teacher_output=teacher_output,
+                        student_output=student_output,
+                        epoch=epoch,
                     )
                     total_loss += loss
                     total_items = {**total_items, **loss_items}

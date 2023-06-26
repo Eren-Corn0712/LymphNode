@@ -1,7 +1,8 @@
 import toolkit.models.swin_transformer as swin_transformer
 import toolkit.models.resnet as resnet
 
-from toolkit.models.head import DINOHead, MixDINOHead, LinearClassifier, TransformerHead, MultiLevelHead
+from toolkit.models.head import (DINOHead, MixDINOHead, LinearClassifier, TransformerHead, MultiLevelHead,
+                                 CrossLevelHead, SelfRelationHeadV2)
 
 from toolkit.models.care import AttnHead
 from toolkit.utils import LOGGER
@@ -65,7 +66,7 @@ def create_teacher_student(args):
     else:
         raise ValueError(f"Unknown architecture: {args.arch}")
 
-    for model in [student, teacher]:
+    for idx, model in enumerate([student, teacher]):
         if hasattr(args, "use_head_prediction") and args.use_head_prediction:
             model.head = DINOHead(
                 model.num_features,
@@ -109,6 +110,27 @@ def create_teacher_student(args):
                 use_bn=args.use_bn_in_head,
                 norm_last_layer=args.norm_last_layer
             )
+        if hasattr(args, "use_corr") and args.use_corr:
+            if args.use_corr == "type1":
+                setattr(model, "use_corr", args.use_corr)
+                model.corr_head = CrossLevelHead(
+                    [model.layer1[-1].conv2.out_channels,
+                     model.layer2[-1].conv2.out_channels,
+                     model.layer3[-1].conv2.out_channels,
+                     model.layer4[-1].conv2.out_channels],
+                    scale=args.out_scale
+                )
+            if args.use_corr == "type2":
+                setattr(model, "use_corr", args.use_corr)
+                model.corr_head = SelfRelationHeadV2(
+                    in_dim=[model.layer1[-1].conv2.out_channels,
+                            model.layer2[-1].conv2.out_channels,
+                            model.layer3[-1].conv2.out_channels,
+                            model.layer4[-1].conv2.out_channels],
+                    scale=args.out_scale,
+                    use_bn=args.use_bn_in_head,
+                    norm_last_layer=args.norm_last_layer,
+                )
 
     LOGGER.info(f"Student and Teacher are built: they are both {args.arch} network.")
     return teacher, student

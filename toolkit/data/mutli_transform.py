@@ -297,7 +297,6 @@ class DataAugmentationLymphNode2(MultiDataAugmentation, metaclass=ABCMeta):
             global_crops_size,
             local_crops_size,
         )
-
         # Data Augmentation set
         self.geometric_augmentation_global = transforms.Compose(
             [
@@ -327,26 +326,25 @@ class DataAugmentationLymphNode2(MultiDataAugmentation, metaclass=ABCMeta):
         )
         global_trans2_extra = transforms.Compose(
             [
-                GaussianBlur(p=0.1),
                 Solarization(0.2),
                 Equalize(0.1),
                 AutoContrast(0.1),
             ]
         )
-        local_trans_extra = GaussianBlur(p=0.5)
+        local_trans_extra = Identity()
 
         normalize = transforms.Compose(
             [
                 transforms.Grayscale(num_output_channels=3),
                 transforms.ToTensor(),
-                transforms.Normalize(mean=(0.2715, 0.2715, 0.2715),
-                                     std=(0.1834, 0.1834, 0.1834)),
             ]
         )
 
         self.global_trans1 = transforms.Compose([global_trans1_extra, normalize])
         self.global_trans2 = transforms.Compose([global_trans2_extra, normalize])
         self.local_trans = transforms.Compose([local_trans_extra, normalize])
+
+
 
 
 class AlbumentationsLymphNode(MultiDataAugmentation, metaclass=ABCMeta):

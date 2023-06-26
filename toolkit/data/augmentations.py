@@ -419,6 +419,7 @@ class ClassificationPresetEval(object):
 
 
 def create_transform(args, name):
+
     if name == "lymph_node_aug":
         transform = DataAugmentationLymphNode(
             global_crops_scale=args.global_crops_scale,
@@ -428,6 +429,15 @@ def create_transform(args, name):
             local_crops_size=args.local_crops_size)
     elif name == "lymph_node_aug_1":
         transform = DataAugmentationLymphNode1(
+            global_crops_scale=args.global_crops_scale,
+            local_crops_scale=args.local_crops_scale,
+            local_crops_number=args.local_crops_number,
+            global_crops_size=args.global_crops_size,
+            local_crops_size=args.local_crops_size)
+
+
+    elif name == "lymph_node_aug_2":
+        transform = DataAugmentationLymphNode2(
             global_crops_scale=args.global_crops_scale,
             local_crops_scale=args.local_crops_scale,
             local_crops_number=args.local_crops_number,
@@ -451,13 +461,6 @@ def create_transform(args, name):
             local_crops_size=args.local_crops_size
         )
 
-    elif name == "lymph_node_aug_2":
-        transform = DataAugmentationLymphNode2(
-            global_crops_scale=args.global_crops_scale,
-            local_crops_scale=args.local_crops_scale,
-            local_crops_number=args.local_crops_number,
-            global_crops_size=args.global_crops_size,
-            local_crops_size=args.local_crops_size)
 
     elif name == "eval_train":
         transform = transforms.Compose([
@@ -517,6 +520,5 @@ def create_transform(args, name):
         )
     else:
         raise ValueError(f"Not support for {name}")
-
     LOGGER.info(f"Data Augmentation: {transform.__class__.__name__}")
     return transform

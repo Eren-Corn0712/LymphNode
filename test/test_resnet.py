@@ -16,7 +16,7 @@ class TestResNet(object):
     def test_multi_level_forward(self):
         model = resnet18().to(self.device)
         x = torch.randn(10, 3, 224, 224).to(self.device)
-        out = model.multi_level_forward_features(x)
+        out = model.multi_level_forward_features_w_pool(x)
         print(
             "ok"
         )

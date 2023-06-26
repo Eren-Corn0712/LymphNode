@@ -15,7 +15,7 @@ def hungarian(similarity):
     batch_size = similarity.shape[0]  # B
     # convert it to cost_matrix
 
-    cost_matrix = similarity - similarity.amax((-1, -2)).shape
+    cost_matrix = similarity - similarity.amax((-1, -2))[..., None, None]
     cost_matrix = cost_matrix.cpu()
 
     batch_row_ind, batch_col_ind = [], []
@@ -26,7 +26,7 @@ def hungarian(similarity):
 
     batch_row_ind = torch.cat(batch_row_ind, 0).to(similarity.device)
     batch_col_ind = torch.cat(batch_col_ind, 0).to(similarity.device)
-    return batch_row_ind, batch_col_ind
+    return batch_row_ind.clone(), batch_col_ind.clone()
 
 
 class BaseDINOLoss(nn.Module):
@@ -504,7 +504,7 @@ class MultiDDINOLoss(nn.Module):
         self.student_temp = student_temp
         self.center_momentum = center_momentum
         self.ncrops = ncrops
-        self.register_buffer("center", torch.zeros(1, out_dim))
+
         for i in range(4):
             self.register_buffer(f"center_grid_{i}", torch.zeros(1, out_dim))
 
@@ -516,6 +516,7 @@ class MultiDDINOLoss(nn.Module):
                         teacher_temp, warmup_teacher_temp_epochs),
             np.ones(nepochs - warmup_teacher_temp_epochs) * teacher_temp
         ))
+        LOGGER.info(f"Use the mode: {self.mode}")
 
     def forward(
             self,
@@ -562,23 +563,22 @@ class MultiDDINOLoss(nn.Module):
 
             total_loss = torch.zeros(1, device=t_fea[0].device)
             n_loss_terms = 0
-            for iq in range(len(t_region)):
-                for v in range(len(s_region)):
-                    if v == iq:
+            for iq, q in enumerate(t_region):
+                for ik, v in enumerate(s_region):
+                    if iq == ik:
                         # we skip cases where student and teacher operate on the same view
                         continue
                     # region level prediction loss
-                    s_region_cur = s_region[v].view(batch_size, s_split_size[v], -1)  # B x T_s x K
-                    s_fea_cur = s_fea[v].view(batch_size, s_split_size[v], -1)  # B x T_s x P
+                    s_region_cur = v.view(batch_size, s_split_size[ik], -1)  # B x T_s x K
+                    s_fea_cur = s_fea[ik].view(batch_size, s_split_size[ik], -1)  # B x T_s x P
 
-                    t_region_cur = t_region[iq].view(batch_size, num_patches, -1)  # B x T_t x K
+                    t_region_cur = q.view(batch_size, num_patches, -1)  # B x T_t x K
                     t_fea_cur = t_fea[iq].view(batch_size, num_patches, -1)  # B x T_t x P
 
                     # similarity matrix between two sets of region features
                     region_sim_matrix = torch.matmul(F.normalize(s_fea_cur, p=2, dim=-1),
                                                      F.normalize(t_fea_cur, p=2, dim=-1).permute(0, 2,
                                                                                                  1))  # B x T_s x T_t
-
 
                     if self.mode == "similarity":
                         # B x T_s; collect the argmax index in teacher for a given student feature
@@ -589,18 +589,25 @@ class MultiDDINOLoss(nn.Module):
                             t_region_cur, 1, region_sim_ind.unsqueeze(2).expand(-1, -1, t_region_cur.size(2)))
 
                         # B x T_s x K --> B
-                        loss_grid = torch.sum(- t_indexed_region * F.log_softmax(s_region_cur, dim=-1), dim=[-1]).mean(-1)
+                        loss_grid = torch.sum(- t_indexed_region * F.log_softmax(s_region_cur, dim=-1), dim=[-1]).mean(
+                            -1)
                         total_loss[0] += loss_grid.mean()
 
-                    else:
+                    elif self.mode == "hungarian":
                         s_index, t_index = hungarian(region_sim_matrix)
 
-                        t_indexed_region = torch.gather(q, 1, t_index.unsqueeze(2).expand(-1, -1, q.size(2)))
-                        s_indexed_region = torch.gather(v, 1, s_index.unsqueeze(2).expand(-1, -1, v.size(2)))
+                        t_indexed_region = torch.gather(t_region_cur, 1,
+                                                        t_index.clone().unsqueeze(2).expand(-1, -1,
+                                                                                            t_region_cur.size(2)))
+                        s_indexed_region = torch.gather(s_region_cur, 1,
+                                                        s_index.clone().unsqueeze(2).expand(-1, -1,
+                                                                                            s_region_cur.size(2)))
 
                         loss_grid = torch.sum(
                             - t_indexed_region * F.log_softmax(s_indexed_region, dim=-1), dim=-1).mean(-1)
                         total_loss[0] += loss_grid.mean()
+                    else:
+                        raise ValueError(f"Not support for {self.mode}")
 
                     n_loss_terms += 1
 
@@ -615,7 +622,7 @@ class MultiDDINOLoss(nn.Module):
         return (
             layer_total_loss.sum(),
             {
-                f"{i + 1}_dino_loss": l for i, l in enumerate(layer_total_loss)
+                f"{i + 1}_dino_loss": l.item() for i, l in enumerate(layer_total_loss)
             }
         )
 
@@ -635,6 +642,136 @@ class MultiDDINOLoss(nn.Module):
         # ema update
         center = center * self.center_momentum + batch_grid_center * (1 - self.center_momentum)
         return center
+
+
+class CrossLevelLoss(nn.Module):
+    def __init__(
+            self,
+            ncrops,
+            warmup_teacher_temp,
+            teacher_temp,
+            warmup_teacher_temp_epochs,
+            nepochs,
+            student_temp=1.0,
+            loss_fun: str = "L2",
+            device=None,
+    ):
+        super().__init__()
+        self.student_temp = student_temp
+        self.ncrops = ncrops
+        # we apply a warm up for the teacher temperature because
+        # a too high temperature makes the training instable at the beginning
+        self.teacher_temp_schedule = np.concatenate((
+            np.linspace(warmup_teacher_temp,
+                        teacher_temp, warmup_teacher_temp_epochs),
+            np.ones(nepochs - warmup_teacher_temp_epochs) * teacher_temp
+        ))
+        if loss_fun == "L2":
+            self.loss_fun = nn.MSELoss()
+        elif loss_fun == "L1":
+            self.loss_fun = nn.L1Loss()
+        else:
+            raise ValueError(f"Not support for {loss_fun}")
+        self.device = device
+
+    def forward(self, teacher_output, student_output, epoch):
+        assert len(teacher_output.keys()) == len(student_output.keys()), "Layers number is not equ."
+
+        total_loss = torch.zeros(2, device=self.device)
+        total_num = 0
+        for (t_layer_idx, t_view), (s_layer_idx, s_view) in zip(teacher_output.items(), student_output.items()):
+            assert t_layer_idx == s_layer_idx, "teacher layer index not equal to student layer index."
+            for t_view_idx, t_output in t_view.items():
+                for s_view_idx, s_output in s_view.items():
+                    if t_view_idx == s_view_idx:
+                        continue
+                    tout1, tout2 = t_output
+                    sout1, sout2 = s_output
+
+                    if tout1.size() != sout1.size():
+                        continue
+
+                    if tout2.size() != sout2.size():
+                        continue
+
+                    total_loss[0] += self.loss_fun(sout1, tout1.detach())
+                    total_loss[1] += self.loss_fun(sout2, tout2.detach())
+                    total_num += 1
+
+        total_loss = (total_loss / total_num)
+        return (
+            total_loss.sum(),
+            {
+                k: v.item() for k, v in zip(["ch_rela1", "ch_rela2"], total_loss)
+            }
+        )
+
+
+class SelfRelationLoss(BaseDINOLoss):
+    def __init__(
+            self,
+            out_dim,
+            ncrops,
+            warmup_teacher_temp,
+            teacher_temp,
+            warmup_teacher_temp_epochs,
+            nepochs,
+            student_temp=0.1,
+            center_momentum=0.9,
+            device=None
+    ):
+        super().__init__(
+            out_dim,
+            ncrops,
+            warmup_teacher_temp,
+            teacher_temp,
+            warmup_teacher_temp_epochs,
+            nepochs,
+            student_temp,
+            center_momentum)
+
+        self.device = device
+        delattr(self, "center")
+
+    def forward(self, teacher_output, student_output, epoch):
+        assert len(teacher_output.keys()) == len(student_output.keys()), "Layers number is not equ."
+        temp = self.teacher_temp_schedule[epoch]
+
+        total_loss = torch.zeros(2, device=self.device)
+        total_num = 0
+        for (t_layer_idx, t_view), (s_layer_idx, s_view) in zip(teacher_output.items(), student_output.items()):
+            assert t_layer_idx == s_layer_idx, "teacher layer index not equal to student layer index."
+            for t_view_idx, t_output in t_view.items():
+                for s_view_idx, s_output in s_view.items():
+                    if t_view_idx == s_view_idx:
+                        continue
+                    tout1, tout2 = t_output
+                    sout1, sout2 = s_output
+
+                    if tout1.size() != sout1.size():
+                        continue
+
+                    if tout2.size() != sout2.size():
+                        continue
+
+                    tout1 = tout1.detach()
+                    tout2 = tout2.detach()
+                    print(torch.sum(-F.softmax(tout1 / temp, -1) * F.log_softmax(sout1 / self.student_temp, -1), -1))
+                    total_loss[0] += torch.sum(
+                        -F.softmax(tout1 / temp, -1) * F.log_softmax(sout1 / self.student_temp, -1), -1).mean(-1).mean(
+                        -1)
+                    total_loss[1] += torch.sum(
+                        -F.softmax(tout2 / temp, -1) * F.log_softmax(sout2 / self.student_temp, -1), -1).mean(-1).mean(
+                        -1)
+                    total_num += 1
+
+        total_loss = (total_loss / total_num)
+        return (
+            total_loss.sum(),
+            {
+                k: v.item() for k, v in zip(["rela_1", "rela_2"], total_loss)
+            }
+        )
 
 
 def build_loss(args, device) -> Dict:
@@ -683,13 +820,40 @@ def build_loss(args, device) -> Dict:
         ).to(device)
     if args.use_multi_level:
         criterion["multi_level_loss"] = MultiDDINOLoss(
-            args.out_dim,
-            args.local_crops_number + 2,  # total number of crops = 2 global crops + local_crops_number
-            args.warmup_teacher_temp,
-            args.teacher_temp,
-            args.warmup_teacher_temp_epochs,
-            args.epochs,
+            out_dim=args.out_dim,
+            ncrops=args.local_crops_number + 2,  # total number of crops = 2 global crops + local_crops_number
+            warmup_teacher_temp=args.warmup_teacher_temp,
+            teacher_temp=args.teacher_temp,
+            warmup_teacher_temp_epochs=args.warmup_teacher_temp_epochs,
+            nepochs=args.epochs,
+            mode=args.mode
         ).to(device)
+
+    if args.use_corr:
+        if args.use_corr == "type1":
+            criterion["cross_loss"] = CrossLevelLoss(
+                ncrops=args.local_crops_number + 2,  # total number of crops = 2 global crops + local_crops_number
+                warmup_teacher_temp=args.warmup_teacher_temp,
+                teacher_temp=args.teacher_temp,
+                warmup_teacher_temp_epochs=args.warmup_teacher_temp_epochs,
+                nepochs=args.epochs,
+                loss_fun=args.loss_fun,
+                device=device
+            ).to(device)
+
+        elif args.use_corr == "type2":
+            criterion["cross_loss"] = SelfRelationLoss(
+                args.out_dim,
+                args.local_crops_number + 2,  # total number of crops = 2 global crops + local_crops_number
+                args.warmup_teacher_temp,
+                args.teacher_temp,
+                args.warmup_teacher_temp_epochs,
+                args.epochs,
+                device=device
+            ).to(device)
+        else:
+            raise ValueError(f"Not support for {args.use_corr}")
+
     s = " ".join(v.__class__.__name__ for k, v in criterion.items())
     LOGGER.info(f"Criterion : {s}")
     return criterion

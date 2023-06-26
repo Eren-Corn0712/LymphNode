@@ -1,15 +1,24 @@
 from typing import List
 
 import torch
-import torch.nn.functional as F
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision.ops.misc import MLP
+
+from toolkit.models.nn.block import Bottleneck
+from toolkit.models.nn.conv import *
+from toolkit.models.nn.transformer import LayerNorm2d
 
 
 def init_weights(m):
     if isinstance(m, nn.Linear):
         nn.init.trunc_normal_(m.weight, std=.02)
         if isinstance(m, nn.Linear) and m.bias is not None:
+            nn.init.constant_(m.bias, 0)
+
+    if isinstance(m, nn.Conv2d):
+        nn.init.trunc_normal_(m.weight, std=0.02)
+        if m.bias is not None:
             nn.init.constant_(m.bias, 0)
 
 
@@ -217,6 +226,257 @@ class MultiLevelHead(nn.Module):
             output[i] = nn.functional.normalize(output[i], dim=-1, p=2)
             output[i] = self.last_layers[i](output[i])
         return output
+
+
+class CrossLevelHead(nn.Module):
+    def __init__(
+            self,
+            in_dim: List,
+            scale: float,
+    ):
+        super().__init__()
+
+        self.fusion_layer = nn.ModuleList(
+            SelfRelationModule(
+                c1=in_dim[i],
+                c2=in_dim[i + 1],
+                scale=scale)
+            for i in range(len(in_dim) - 1)
+        )
+
+    def forward(self, x):
+        output = []
+        for i, layer in enumerate(self.fusion_layer):
+            layer_out = layer(x[i], x[i + 1])
+            output.append(layer_out)
+
+        return output
+
+
+class CrossLevelCrossAttention(nn.Module):
+    def __init__(self, c1, c2):
+        super().__init__()
+        self.projection1 = Bottleneck(c1, c1, k=(1, 1))
+        self.projection2 = Bottleneck(c2, c2, k=(1, 1))
+
+        self.upsample = ConvTranspose(c2, c2, 4, 2, 1, act=nn.GELU())
+        self.downsample = Conv(c1, c1, 3, 2, act=nn.GELU())
+
+        self.apply(init_weights)
+
+    def forward(self, x, y):
+        # down_x : b, c1, h2, w2  up_y: b, c2, h1, w1
+        down_x, up_y = self.downsample(x), self.upsample(y)
+
+        x, y = self.projection1(x), self.projection2(y)
+        down_x, up_y = self.projection1(down_x), self.projection2(up_y)
+
+        b, c1, h1, w1 = x.shape
+        b, c2, h2, w2 = y.shape
+        dim1, dim2 = h1 * w1, h2 * w2
+        ch_scale1, ch_scale2 = (dim1 ** -0.5), (dim2 ** -0.5)
+
+        # x: b, c1, h1w1
+        # y: b, c2, h2w2
+        x, y = x.contiguous().view(b, c1, dim1), y.contiguous().view(b, c2, dim2)
+
+        # down_x: b, c1, h2w2
+        # up_y  : b, c2, h1w1
+        down_x, up_y = down_x.view(b, c1, dim2), up_y.view(b, c2, dim1)
+
+        dot1 = torch.matmul(x, up_y.transpose(-1, -2)) * ch_scale1
+        dot2 = torch.matmul(y, down_x.transpose(-1, -2)) * ch_scale2
+
+        dot1 = torch.clamp(dot1, min=1e-7, max=1 - 1e-7)
+        dot2 = torch.clamp(dot2, min=1e-7, max=1 - 1e-7)
+
+        attn1 = F.softmax(dot1, dim=-1)
+        attn2 = F.softmax(dot2, dim=-1)
+
+        out1 = torch.matmul(attn1, y)
+        out2 = torch.matmul(attn2, x)
+
+        out1 = torch.clamp(out1, min=1e-7, max=1 - 1e-7)
+        out2 = torch.clamp(out2, min=1e-7, max=1 - 1e-7)
+
+        return out1, out2
+
+
+class SelfRelationModule(nn.Module):
+    def __init__(
+            self,
+            c1: int,
+            c2: int,
+            scale: float):
+        super().__init__()
+        self.c1_scale = int(c1 * scale)
+        self.c2_scale = int(c2 * scale)
+
+        self.norm1 = LayerNorm2d(self.c1_scale)
+        self.norm2 = LayerNorm2d(self.c2_scale)
+
+        self.norm3 = LayerNorm2d(self.c1_scale)
+        self.norm4 = LayerNorm2d(self.c2_scale)
+
+        self.proj1 = Bottleneck(c1, self.c1_scale, k=(1, 1))
+        self.proj2 = Bottleneck(c2, self.c2_scale, k=(1, 1))
+
+        self.up_sa = ConvTranspose(c2, c2, 4, 2, 1, act=nn.GELU())
+        self.down_sa = Conv(c1, c1, 3, 2, act=nn.GELU())
+
+        self.apply(init_weights)
+
+    def forward(self, x, y):
+        down_x, up_y = self.down_sa(x), self.up_sa(y)
+        x, y, down_x, up_y = self.proj1(x), self.proj2(y), self.proj1(down_x), self.proj2(up_y)
+
+        # normalizer layer
+        x = self.norm1(x)
+        y = self.norm2(y)
+        down_x = self.norm3(down_x)
+        up_y = self.norm4(up_y)
+
+        # Some Variables
+        (b, c1, h1, w1), (b, c2, h2, w2) = x.shape, y.shape
+        dim1, dim2 = h1 * w1, h2 * w2
+        ch_scale1, ch_scale2 = (dim1 ** -0.5), (dim2 ** -0.5)
+
+        # Reshape
+        x, y = x.view(b, c1, dim1), y.view(b, c2, dim2)
+        down_x, up_y = down_x.view(b, c1, dim2), up_y.view(b, c2, dim1)
+
+        # Attention
+        # Pre scale
+        x = x * ch_scale1
+        y = y * ch_scale2
+
+        dot1 = torch.bmm(x, up_y.transpose(-1, -2))
+        dot2 = torch.bmm(y, down_x.transpose(-1, -2))
+
+        attn1 = F.softmax(dot1, dim=-1)
+        attn2 = F.softmax(dot2, dim=-1)
+
+        out1 = torch.bmm(attn1, y)
+        out2 = torch.bmm(attn2, x)
+
+        return out1, out2
+
+
+class SelfRelationHeadV2(nn.Module):
+    def __init__(
+            self,
+            in_dim,
+            scale=1.0,
+            use_bn=False,
+            norm_last_layer=True,
+            num_layers=3,
+            hidden_dim=1024,
+            bottleneck_dim=128,
+
+    ):
+        super().__init__()
+        self.fusion_layer = nn.ModuleList(
+            SelfRelationModuleV2(
+                c1=in_dim[i],
+                c2=in_dim[i + 1],
+                scale=scale,
+                use_bn=use_bn,
+                norm_last_layer=norm_last_layer,
+                num_layers=num_layers,
+                hidden_dim=hidden_dim,
+                bottleneck_dim=bottleneck_dim)
+            for i in range(len(in_dim) - 1)
+        )
+
+    def forward(self, x):
+        output = []
+        for i, layer in enumerate(self.fusion_layer):
+            layer_out = layer(x[i], x[i + 1])
+            output.append(layer_out)
+
+        return output
+
+
+class SelfRelationModuleV2(SelfRelationModule):
+    def __init__(
+            self,
+            c1: int,
+            c2: int,
+            scale: float,
+            use_bn=False,
+            norm_last_layer=True,
+            num_layers=3,
+            hidden_dim=1024,
+            bottleneck_dim=128
+    ):
+        super().__init__(c1, c2, scale)
+        self.proj1 = MLP(
+            in_channels=c1,
+            hidden_channels=[hidden_dim] * (num_layers - 2) + [bottleneck_dim],
+            norm_layer=nn.BatchNorm1d if use_bn else None,
+            activation_layer=GELU)
+
+        self.proj2 = MLP(
+            in_channels=c2,
+            hidden_channels=[hidden_dim] * (num_layers - 2) + [bottleneck_dim],
+            norm_layer=nn.BatchNorm1d if use_bn else None,
+            activation_layer=GELU)
+
+        self.apply(init_weights)
+        self.last_layer1 = nn.utils.weight_norm(nn.Linear(bottleneck_dim, self.c1_scale, bias=False))
+        self.last_layer1.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.last_layer1.weight_g.requires_grad = False
+
+        self.last_layer2 = nn.utils.weight_norm(nn.Linear(bottleneck_dim, self.c2_scale, bias=False))
+        self.last_layer2.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.last_layer2.weight_g.requires_grad = False
+
+    def forward(self, x, y):
+        # up-sample and down-sample
+        down_x, up_y = self.down_sa(x), self.up_sa(y)
+
+        # normalizer layer
+        x = self.norm1(x)
+        y = self.norm2(y)
+        down_x = self.norm3(down_x)
+        up_y = self.norm4(up_y)
+
+        # Some Variables
+        (b, c1, h1, w1), (b, c2, h2, w2) = x.shape, y.shape
+        dim1, dim2 = h1 * w1, h2 * w2
+        ch_scale1, ch_scale2 = (dim1 ** -0.5), (dim2 ** -0.5)
+
+        # Reshape
+        x, y = x.view(b, c1, dim1), y.view(b, c2, dim2)
+        down_x, up_y = down_x.view(b, c1, dim2), up_y.view(b, c2, dim1)
+
+        # Attention
+        # Pre scale
+        x = x * ch_scale1
+        y = y * ch_scale2
+
+        out1 = self.attn_opt(x, up_y, y)
+        out2 = self.attn_opt(y, down_x, x)
+
+        out1 = self.proj1(out1.view(b, c1, dim2).permute(0, 2, 1).contiguous().view(b * dim2, c1))  # b c hw -> b hw c
+        out2 = self.proj2(out2.view(b, c2, dim1).permute(0, 2, 1).contiguous().view(b * dim1, c2))  # b c hw -> b hw c
+
+        out1 = nn.functional.normalize(out1, dim=-1, p=2)
+        out1 = self.last_layer1(out1)
+
+        out2 = nn.functional.normalize(out2, dim=-1, p=2)
+        out2 = self.last_layer2(out2)
+
+        return out1.view(b, dim2, c1), out2.view(b, dim1, c2)
+
+    @staticmethod
+    def attn_opt(query, key, value):
+        dot = torch.bmm(query, key.transpose(-1, -2))
+        attn = F.softmax(dot, dim=-1)
+        out = torch.bmm(attn, value)
+        return out
 
 
 class LinearClassifier(nn.Module):
