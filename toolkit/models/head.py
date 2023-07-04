@@ -8,6 +8,7 @@ from torchvision.ops.misc import MLP
 from toolkit.models.nn.block import Bottleneck
 from toolkit.models.nn.conv import *
 from toolkit.models.nn.transformer import LayerNorm2d
+from toolkit.utils import LOGGER
 
 
 def init_weights(m):
@@ -20,6 +21,25 @@ def init_weights(m):
         nn.init.trunc_normal_(m.weight, std=0.02)
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
+
+
+class Interpolate(nn.Module):
+    def __init__(self,
+                 size=None, scale_factor=None, mode='nearest', align_corners=None, recompute_scale_factor=None,
+                 antialias=False
+                 ):
+        super().__init__()
+        self.size = size
+        self.scale_factor = scale_factor
+        self.mode = mode
+        self.align_corners = align_corners
+        self.recompute_scale_factor = recompute_scale_factor
+        self.antialias = antialias
+
+    def forward(self, x):
+        return F.interpolate(x, self.size, self.scale_factor, self.mode, self.align_corners,
+                             self.recompute_scale_factor,
+                             self.antialias)
 
 
 class DINOHead(nn.Module):
@@ -233,16 +253,25 @@ class CrossLevelHead(nn.Module):
             self,
             in_dim: List,
             scale: float,
+            learnable_sample=True,
     ):
         super().__init__()
+
+        LOGGER.info(f"Head: {self.__class__.__name__}")
+        LOGGER.info(f"in_dim: {in_dim}")
+        LOGGER.info(f"scale: {scale}")
+        LOGGER.info(f"learnable_sample: {learnable_sample}")
 
         self.fusion_layer = nn.ModuleList(
             SelfRelationModule(
                 c1=in_dim[i],
                 c2=in_dim[i + 1],
-                scale=scale)
+                scale=scale,
+                learnable_sample=learnable_sample
+            )
             for i in range(len(in_dim) - 1)
         )
+
 
     def forward(self, x):
         output = []
@@ -253,61 +282,13 @@ class CrossLevelHead(nn.Module):
         return output
 
 
-class CrossLevelCrossAttention(nn.Module):
-    def __init__(self, c1, c2):
-        super().__init__()
-        self.projection1 = Bottleneck(c1, c1, k=(1, 1))
-        self.projection2 = Bottleneck(c2, c2, k=(1, 1))
-
-        self.upsample = ConvTranspose(c2, c2, 4, 2, 1, act=nn.GELU())
-        self.downsample = Conv(c1, c1, 3, 2, act=nn.GELU())
-
-        self.apply(init_weights)
-
-    def forward(self, x, y):
-        # down_x : b, c1, h2, w2  up_y: b, c2, h1, w1
-        down_x, up_y = self.downsample(x), self.upsample(y)
-
-        x, y = self.projection1(x), self.projection2(y)
-        down_x, up_y = self.projection1(down_x), self.projection2(up_y)
-
-        b, c1, h1, w1 = x.shape
-        b, c2, h2, w2 = y.shape
-        dim1, dim2 = h1 * w1, h2 * w2
-        ch_scale1, ch_scale2 = (dim1 ** -0.5), (dim2 ** -0.5)
-
-        # x: b, c1, h1w1
-        # y: b, c2, h2w2
-        x, y = x.contiguous().view(b, c1, dim1), y.contiguous().view(b, c2, dim2)
-
-        # down_x: b, c1, h2w2
-        # up_y  : b, c2, h1w1
-        down_x, up_y = down_x.view(b, c1, dim2), up_y.view(b, c2, dim1)
-
-        dot1 = torch.matmul(x, up_y.transpose(-1, -2)) * ch_scale1
-        dot2 = torch.matmul(y, down_x.transpose(-1, -2)) * ch_scale2
-
-        dot1 = torch.clamp(dot1, min=1e-7, max=1 - 1e-7)
-        dot2 = torch.clamp(dot2, min=1e-7, max=1 - 1e-7)
-
-        attn1 = F.softmax(dot1, dim=-1)
-        attn2 = F.softmax(dot2, dim=-1)
-
-        out1 = torch.matmul(attn1, y)
-        out2 = torch.matmul(attn2, x)
-
-        out1 = torch.clamp(out1, min=1e-7, max=1 - 1e-7)
-        out2 = torch.clamp(out2, min=1e-7, max=1 - 1e-7)
-
-        return out1, out2
-
-
 class SelfRelationModule(nn.Module):
     def __init__(
             self,
             c1: int,
             c2: int,
-            scale: float):
+            scale: float,
+            learnable_sample: True):
         super().__init__()
         self.c1_scale = int(c1 * scale)
         self.c2_scale = int(c2 * scale)
@@ -321,8 +302,12 @@ class SelfRelationModule(nn.Module):
         self.proj1 = Bottleneck(c1, self.c1_scale, k=(1, 1))
         self.proj2 = Bottleneck(c2, self.c2_scale, k=(1, 1))
 
-        self.up_sa = ConvTranspose(c2, c2, 4, 2, 1, act=nn.GELU())
-        self.down_sa = Conv(c1, c1, 3, 2, act=nn.GELU())
+        if learnable_sample is True:
+            self.up_sa = ConvTranspose(c2, c2, 4, 2, 1, act=nn.GELU())
+            self.down_sa = Conv(c1, c1, 3, 2, act=nn.GELU())
+        else:
+            self.up_sa = Interpolate(scale_factor=2)
+            self.down_sa = Interpolate(scale_factor=0.5)
 
         self.apply(init_weights)
 
@@ -410,6 +395,13 @@ class SelfRelationModuleV2(SelfRelationModule):
             bottleneck_dim=128
     ):
         super().__init__(c1, c2, scale)
+
+        self.norm1 = LayerNorm2d(c1)
+        self.norm2 = LayerNorm2d(c2)
+
+        self.norm3 = LayerNorm2d(c1)
+        self.norm4 = LayerNorm2d(c2)
+
         self.proj1 = MLP(
             in_channels=c1,
             hidden_channels=[hidden_dim] * (num_layers - 2) + [bottleneck_dim],
@@ -469,7 +461,7 @@ class SelfRelationModuleV2(SelfRelationModule):
         out2 = nn.functional.normalize(out2, dim=-1, p=2)
         out2 = self.last_layer2(out2)
 
-        return out1.view(b, dim2, c1), out2.view(b, dim1, c2)
+        return out1.view(b, dim2, self.c1_scale), out2.view(b, dim1, self.c2_scale)
 
     @staticmethod
     def attn_opt(query, key, value):
