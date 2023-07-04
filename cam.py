@@ -16,7 +16,7 @@ from toolkit.data.lymph_dataset import KFoldLymphDataset
 from toolkit.models import create_linear_layer
 from toolkit.utils.torch_utils import load_pretrained_weights, load_pretrained_linear_weights
 from toolkit.utils.plots import plot_cam
-from toolkit.data.augmentations import create_transform
+from toolkit.data import create_transform
 from pathlib import Path
 import pathlib
 from tqdm import tqdm
@@ -80,7 +80,7 @@ def main_cam(args):
     font_color = (255, 255, 255)  # 文字顏色為白色
     thickness = 2
 
-    for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
+    for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_patient_fold_dataset()):
         fold_path = Path(backbone_args.save_dir) / f"{int(k + 1)}-fold"
         fold_model_path = (fold_path / "best").with_suffix(".pth")
         # TO DO: Modfiy this name

@@ -15,7 +15,7 @@ from toolkit.cfg import get_cfg
 from toolkit.data.bulid_dataloader import create_loader
 from toolkit.data.lymph_dataset import KFoldLymphDataset
 from toolkit.data.sampler import creat_sampler
-from toolkit.data.augmentations import create_transform
+from toolkit.data import create_transform
 
 from toolkit.utils.dist_utils import (
     init_distributed_mode, is_main_process,
@@ -53,7 +53,14 @@ def main(args):
 
     best_results = []
     k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=5, shuffle=True, random_state=args.seed)
-    for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
+
+    if args.split == "default":
+        fold = k_fold_dataset.generate_fold_dataset
+    else:
+        fold = k_fold_dataset.generate_patient_fold_dataset
+    LOGGER.info(f"Folder Split by {fold.__name__}")
+
+    for k, (train_set, test_set) in enumerate(fold()):
         # ============ K Folder training start  ... ============
 
         # ============ wandb run ========
@@ -230,7 +237,8 @@ def main(args):
 
                     cm = confusion_matrix(label, predict)
                     plot_confusion_matrix(cm, name, save_dir)
-                    case_analysis(test_stats['save_dict'], save_dir)
+                    if args.split == "patient":
+                        case_analysis(test_stats['save_dict'], save_dir)
 
                     if args.wandb:
                         wandb.sklearn.plot_confusion_matrix(label, predict, name)

@@ -112,25 +112,15 @@ def create_teacher_student(args):
             )
         if hasattr(args, "use_corr") and args.use_corr:
             if args.use_corr == "type1":
+                LOGGER.info("Use Type1 Head")
                 setattr(model, "use_corr", args.use_corr)
                 model.corr_head = CrossLevelHead(
                     [model.layer1[-1].conv2.out_channels,
                      model.layer2[-1].conv2.out_channels,
                      model.layer3[-1].conv2.out_channels,
                      model.layer4[-1].conv2.out_channels],
-                    scale=args.out_scale
-                )
-            if args.use_corr == "type2":
-                setattr(model, "use_corr", args.use_corr)
-                model.corr_head = SelfRelationHeadV2(
-                    in_dim=[model.layer1[-1].conv2.out_channels,
-                            model.layer2[-1].conv2.out_channels,
-                            model.layer3[-1].conv2.out_channels,
-                            model.layer4[-1].conv2.out_channels],
                     scale=args.out_scale,
-                    use_bn=args.use_bn_in_head,
-                    norm_last_layer=args.norm_last_layer,
+                    learnable_sample=args.learnable_sample
                 )
-
     LOGGER.info(f"Student and Teacher are built: they are both {args.arch} network.")
     return teacher, student

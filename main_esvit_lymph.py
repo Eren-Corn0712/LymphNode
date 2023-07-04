@@ -18,7 +18,7 @@ from toolkit.models import create_teacher_student
 from toolkit.data.lymph_dataset import KFoldLymphDataset
 from toolkit.data.bulid_dataloader import create_loader
 from toolkit.data.sampler import creat_sampler
-from toolkit.data.augmentations import create_transform
+from toolkit.data import create_transform
 
 from toolkit.utils import (yaml_save, print_options, LOGGER)
 from toolkit.utils.torch_utils import (init_seeds, de_parallel, has_batchnorms, cosine_scheduler, time_sync,
@@ -52,8 +52,13 @@ def main(args):
 
     # ============ preparing data ... ============
     k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=args.n_splits, shuffle=True, random_state=args.seed)
+    if args.split == "default":
+        fold = k_fold_dataset.generate_fold_dataset
+    else:
+        fold = k_fold_dataset.generate_patient_fold_dataset
+    LOGGER.info(f"Folder Split by {fold.__name__}")
 
-    for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
+    for k, (train_set, test_set) in enumerate(fold()):
         # ============ K Folder training start  ... ============
 
         # ============ wandb run ========
@@ -291,6 +296,9 @@ def train_one_epoch(
         else:
             teacher_input = images[:2]
             student_input = images
+
+        if it == 0:
+            LOGGER.info(f"teacher input: {len(teacher_input)} student input: {len(student_input)}")
 
         # teacher and student forward passes + compute dino loss
         with torch.cuda.amp.autocast(scaler is not None), torch.backends.cuda.sdp_kernel(enable_flash=False):

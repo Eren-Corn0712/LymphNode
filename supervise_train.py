@@ -25,7 +25,7 @@ from toolkit.utils.torch_utils import (accuracy, ExponentialMovingAverage, set_w
 from toolkit.utils.python_utils import merge_dict_with_prefix, batch_dataconcat
 from toolkit.data.augmentations import RandomMixup, RandomCutmix
 from toolkit.data.lymph_dataset import KFoldLymphDataset
-from toolkit.data.augmentations import create_transform
+from toolkit.data import create_transform
 from toolkit.utils.plots import plot_confusion_matrix, plot_txt
 from toolkit.data.sampler import creat_sampler
 from eval_linear import case_analysis
@@ -159,7 +159,7 @@ def main(args):
     best_results = []
     k_fold_dataset = KFoldLymphDataset(args.data_path, n_splits=5, shuffle=True, random_state=0)
     print(f"Total data : {len(k_fold_dataset)}")
-    for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_fold_dataset()):
+    for k, (train_set, test_set) in enumerate(k_fold_dataset.generate_patient_fold_dataset()):
         # create the folder output
         print(f"train data : {len(train_set)}, test_set : {len(test_set)}")
 

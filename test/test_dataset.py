@@ -22,13 +22,19 @@ class TestClass(object):
         print(data_set.info())
         print(len(data_set))
 
-    def _test_k_fold_lymph_dataset(self, *args, **kwargs):
+    def test_patient_fold_dataset(self, *args, **kwargs):
         dataset1 = KFoldLymphDataset(DIR_DATASET, random_state=0)
-        dataset2 = KFoldLymphDataset(DIR_DATASET, random_state=0)
-        z = zip(dataset1.generate_fold_dataset(), dataset2.generate_fold_dataset())
-        for a, b in z:
-            print(a[0] == b[0])
-            print(a[1] == b[1])
+        for train_dataset, test_dataset in dataset1.generate_patient_fold_dataset():
+            print(train_dataset.__len__())
+            print(test_dataset.__len__())
+
+    def test_fold_dataset(self, *args, **kwargs):
+        dataset1 = KFoldLymphDataset(DIR_DATASET, random_state=0)
+        fold = dataset1.generate_fold_dataset
+        print(fold.__name__)
+        for train_dataset, test_dataset in fold():
+            print(train_dataset.__len__())
+            print(test_dataset.__len__())
 
     def _test_compute_mean_var(self):
         dataset = KFoldLymphDataset(DIR_DATASET)
@@ -44,7 +50,7 @@ class TestClass(object):
         print("Mean:", mean)
         print("std:", std)
 
-    def test_dataloader(self):
+    def _test_dataloader(self):
         data_set = KFoldLymphDataset(DIR_DATASET)
         data_set.transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
         sampler = RandomSampler(data_source=data_set)

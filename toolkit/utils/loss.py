@@ -670,9 +670,13 @@ class CrossLevelLoss(nn.Module):
             self.loss_fun = nn.MSELoss()
         elif loss_fun == "L1":
             self.loss_fun = nn.L1Loss()
+        elif loss_fun == "CE":
+            self.loss_fun = nn.CrossEntropyLoss()
         else:
             raise ValueError(f"Not support for {loss_fun}")
         self.device = device
+
+        LOGGER.info(f"****{self.loss_fun.__class__.__name__}****")
 
     def forward(self, teacher_output, student_output, epoch):
         assert len(teacher_output.keys()) == len(student_output.keys()), "Layers number is not equ."
@@ -694,8 +698,16 @@ class CrossLevelLoss(nn.Module):
                     if tout2.size() != sout2.size():
                         continue
 
-                    total_loss[0] += self.loss_fun(sout1, tout1.detach())
-                    total_loss[1] += self.loss_fun(sout2, tout2.detach())
+                    if isinstance(self.loss_fun, (nn.L1Loss, nn.MSELoss)):
+                        total_loss[0] += self.loss_fun(sout1, tout1.detach())
+                        total_loss[1] += self.loss_fun(sout2, tout2.detach())
+
+                    elif isinstance(self.loss_fun, (nn.CrossEntropyLoss,)):
+                        total_loss[0] += self.loss_fun(self.bchw2c(sout1), self.bchw2c(tout1.detach()))
+                        total_loss[1] += self.loss_fun(self.bchw2c(sout2), self.bchw2c(tout2.detach()))
+                    else:
+                        raise ValueError(f"{type(self.loss_fun)} is not support")
+
                     total_num += 1
 
         total_loss = (total_loss / total_num)
@@ -705,6 +717,10 @@ class CrossLevelLoss(nn.Module):
                 k: v.item() for k, v in zip(["ch_rela1", "ch_rela2"], total_loss)
             }
         )
+
+    def bchw2c(self, x):
+        b, c, hw = x.shape
+        return x.permute(0, 2, 1).contiguous().view(b * hw, c)
 
 
 class SelfRelationLoss(BaseDINOLoss):
@@ -741,29 +757,18 @@ class SelfRelationLoss(BaseDINOLoss):
         total_num = 0
         for (t_layer_idx, t_view), (s_layer_idx, s_view) in zip(teacher_output.items(), student_output.items()):
             assert t_layer_idx == s_layer_idx, "teacher layer index not equal to student layer index."
-            for t_view_idx, t_output in t_view.items():
-                for s_view_idx, s_output in s_view.items():
-                    if t_view_idx == s_view_idx:
-                        continue
-                    tout1, tout2 = t_output
-                    sout1, sout2 = s_output
+            for (t_view_idx, t_output), (s_view_idx, s_output) in zip(t_view.items(), s_view.items()):
+                tout1, tout2 = t_output
+                sout1, sout2 = s_output
 
-                    if tout1.size() != sout1.size():
-                        continue
+                tout1 = tout1.detach()
+                tout2 = tout2.detach()
 
-                    if tout2.size() != sout2.size():
-                        continue
-
-                    tout1 = tout1.detach()
-                    tout2 = tout2.detach()
-                    print(torch.sum(-F.softmax(tout1 / temp, -1) * F.log_softmax(sout1 / self.student_temp, -1), -1))
-                    total_loss[0] += torch.sum(
-                        -F.softmax(tout1 / temp, -1) * F.log_softmax(sout1 / self.student_temp, -1), -1).mean(-1).mean(
-                        -1)
-                    total_loss[1] += torch.sum(
-                        -F.softmax(tout2 / temp, -1) * F.log_softmax(sout2 / self.student_temp, -1), -1).mean(-1).mean(
-                        -1)
-                    total_num += 1
+                total_loss[0] += torch.sum(
+                    -F.softmax(tout1 / temp, -1) * F.log_softmax(sout1 / self.student_temp, -1), -1).mean(-1).mean(-1)
+                total_loss[1] += torch.sum(
+                    -F.softmax(tout2 / temp, -1) * F.log_softmax(sout2 / self.student_temp, -1), -1).mean(-1).mean(-1)
+                total_num += 1
 
         total_loss = (total_loss / total_num)
         return (

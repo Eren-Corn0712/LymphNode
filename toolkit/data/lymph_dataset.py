@@ -34,13 +34,24 @@ class LymphBaseDataset(Dataset, ABC):
     def info(self):
         count_dict_label = {}
         count_id_label = {}
+        b = []
+        m = []
         for l in self.labels:
             count_dict_label[l['type_name']] = count_dict_label.setdefault(l['type_name'], 0) + 1
             count_id_label[l['patient_id']] = count_id_label.setdefault(l['patient_id'], 0) + 1
+            if l['type_name'] == 'Benign':
+                if l['patient_id'] not in b:
+                    b.append(l['patient_id'])
+
+            if l['type_name'] == 'Malignant':
+                if l['patient_id'] not in m:
+                    m.append(l['patient_id'])
 
         print(count_dict_label)
         print(len(count_id_label.keys()))
         print(count_id_label)
+        print(len(b))
+        print(len(m))
 
     def get_labels(self, img_path):
         try:
@@ -93,7 +104,7 @@ class KFoldLymphDataset(LymphBaseDataset):
         self.stratified_k_fold = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=random_state)
         self.transform = transform
 
-    def generate_fold_dataset(self):
+    def generate_patient_fold_dataset(self):
         labels = np.array([list(l.values()) for l in self.labels])
         X, X_dx = np.unique(labels[:, 2], return_index=True)  # ID
         y = labels[X_dx, 1]  # Label value
@@ -101,6 +112,7 @@ class KFoldLymphDataset(LymphBaseDataset):
             train_key_label, train_key_id = y[train_idx], X[train_idx]
             test_key_label, test_key_id = y[test_idx], X[test_idx]
 
+            # search label
             train_labels = []
             for label, id in zip(train_key_label, train_key_id):
                 train_labels += self.search_labels(int(label), id)
@@ -111,6 +123,20 @@ class KFoldLymphDataset(LymphBaseDataset):
 
             self.check_dataset(train_labels, test_labels, 'patient_id')
 
+            train_dataset, test_dataset = WrapperFoldDataset(train_labels), WrapperFoldDataset(test_labels)
+            copy_attr(train_dataset, self, include=("class_to_idx", "classes"))  # copy attr from self to dataset
+            copy_attr(test_dataset, self, include=("class_to_idx", "classes"))  # copy attr from self to dataset
+
+            yield train_dataset, test_dataset
+
+    def generate_fold_dataset(self):
+        labels = np.array([list(l.values()) for l in self.labels])
+        X = labels[:, 3]  # ID
+        y = labels[:, 0]  # Label value
+        for train_idx, test_idx in self.stratified_k_fold.split(X=X, y=y):
+
+            train_labels = [self.labels[i] for i in train_idx]
+            test_labels = [self.labels[i] for i in test_idx]
             train_dataset, test_dataset = WrapperFoldDataset(train_labels), WrapperFoldDataset(test_labels)
             copy_attr(train_dataset, self, include=("class_to_idx", "classes"))  # copy attr from self to dataset
             copy_attr(test_dataset, self, include=("class_to_idx", "classes"))  # copy attr from self to dataset
